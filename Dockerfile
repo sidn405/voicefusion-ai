@@ -1,4 +1,4 @@
-# ---- Python FastAPI backend for VoiceFusion AI ----
+# ---- Python Flask backend for LawBot 360 Voice Sales Agent ----
 FROM python:3.11.9
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy requirements file
 COPY requirements.txt .
 
-# Install PyTorch CPU versions from specific index
+# Install PyTorch CPU versions from specific index (for voice cloning)
 RUN pip install torch==2.5.1 torchaudio==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu
 
 # Remove PyTorch lines from requirements to avoid conflicts
@@ -37,5 +37,5 @@ COPY . .
 ENV PORT=8080
 EXPOSE 8080
 
-# Start FastAPI
-CMD ["sh","-c","uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+# Start Flask app (NOT FastAPI)
+CMD ["python", "twilio_phone_integration.py"]
