@@ -1,29 +1,31 @@
 """
-LawBot 360 Voice Sales Agent - FastAPI Backend with Real-Time Voice Cloning
-Handles Twilio webhooks with dynamic AI conversation using your cloned voice
+LawBot 360 Voice Sales Agent - FastAPI Backend with Replicate Voice Cloning
+Handles Twilio webhooks with dynamic AI conversation using your cloned voice via Replicate API
 """
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import PlainTextResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
 from twilio.twiml.voice_response import VoiceResponse, Dial, Gather
 from twilio.rest import Client
 import os
 import resend
 from openai import OpenAI
+import replicate
+import requests
 import uuid
 from pathlib import Path
 
 # Initialize FastAPI
 app = FastAPI(title="LawBot 360 Voice Sales Agent")
 
-# Create audio directory for generated files
+# Create audio directory for downloaded files
 AUDIO_DIR = Path("/tmp/audio")
 AUDIO_DIR.mkdir(exist_ok=True)
 
-# Initialize clients at module level (safe - no scipy yet)
+# Initialize clients
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 resend.api_key = os.getenv("RESEND_API_KEY")
+replicate_client = replicate.Client(api_token=os.getenv("REPLICATE_API_TOKEN"))
 
 twilio_client = Client(
     os.getenv("TWILIO_ACCOUNT_SID"),
@@ -35,46 +37,52 @@ HUMAN_PHONE = os.getenv("PHONE")
 REFERENCE_VOICE = "reference_voice.wav"
 SERVER_URL = os.getenv("SERVER_URL", "https://voicefusion-ai-production.up.railway.app")
 
-# TTS will be loaded lazily in routes
-tts_instance = None
-
-# Conversation memory (in production, use Redis/database)
+# Conversation memory
 conversations = {}
 
 
-def get_tts():
-    """Lazy load TTS - only when needed"""
-    global tts_instance
-    if tts_instance is None:
-        print("🎤 Loading voice clone...")
-        from TTS.api import TTS
-        tts_instance = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
-        print("✅ Voice clone loaded!")
-    return tts_instance
-
-
 def generate_speech(text: str) -> str:
-    """Generate speech with cloned voice and return URL"""
-    tts = get_tts()
+    """Generate speech with cloned voice using Replicate API (no scipy issues!)"""
     
-    # Generate unique filename
-    audio_id = str(uuid.uuid4())
-    output_file = AUDIO_DIR / f"{audio_id}.wav"
+    print(f"🎙️ Generating speech via Replicate: '{text[:50]}...'")
     
-    print(f"🎙️ Generating speech: '{text[:50]}...'")
-    
-    tts.tts_to_file(
-        text=text,
-        file_path=str(output_file),
-        speaker_wav=REFERENCE_VOICE,
-        language="en"
-    )
-    
-    # Return public URL for Twilio to play
-    audio_url = f"{SERVER_URL}/audio/{audio_id}.wav"
-    print(f"✅ Audio ready: {audio_url}")
-    
-    return audio_url
+    try:
+        # Upload reference voice if needed (first time)
+        with open(REFERENCE_VOICE, "rb") as voice_file:
+            voice_data = voice_file.read()
+        
+        # Generate speech using Replicate's XTTS-v2
+        output = replicate_client.run(
+            "lucataco/xtts-v2:684bc3855b37866c0c65add2ff39c78f3dea3f4ff103a436465326e0f438d55e",
+            input={
+                "text": text,
+                "speaker": voice_data,  # Your voice sample
+                "language": "en",
+                "cleanup_voice": False
+            }
+        )
+        
+        # Download generated audio
+        audio_id = str(uuid.uuid4())
+        output_file = AUDIO_DIR / f"{audio_id}.wav"
+        
+        # Replicate returns a URL to the audio
+        audio_response = requests.get(output, timeout=30)
+        audio_response.raise_for_status()
+        
+        with open(output_file, "wb") as f:
+            f.write(audio_response.content)
+        
+        # Return public URL for Twilio to play
+        audio_url = f"{SERVER_URL}/audio/{audio_id}.wav"
+        print(f"✅ Audio ready: {audio_url}")
+        
+        return audio_url
+        
+    except Exception as e:
+        print(f"❌ Replicate error: {e}")
+        # Fallback: return empty string (will use Twilio voice)
+        return ""
 
 
 def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
@@ -140,9 +148,10 @@ async def root():
     """Health check"""
     return {
         "status": "ok",
-        "service": "LawBot 360 Voice Sales Agent - Real-Time Voice Cloning",
-        "voice_cloning": "enabled",
-        "human_phone": HUMAN_PHONE
+        "service": "LawBot 360 Voice Sales Agent - Replicate Voice Cloning",
+        "voice_cloning": "enabled (via Replicate API)",
+        "human_phone": HUMAN_PHONE,
+        "no_scipy_issues": True
     }
 
 
@@ -322,14 +331,24 @@ async def fallback_choice(request: Request):
 
 @app.get("/test-tts")
 async def test_tts():
-    """Test endpoint to verify TTS loads correctly"""
+    """Test endpoint to verify Replicate voice cloning works"""
     try:
-        tts = get_tts()
-        return {
-            "status": "success",
-            "message": "TTS loaded successfully",
-            "model": "xtts_v2"
-        }
+        # Test generating speech
+        test_text = "This is a test of your cloned voice using Replicate API."
+        audio_url = generate_speech(test_text)
+        
+        if audio_url:
+            return {
+                "status": "success",
+                "message": "Replicate voice cloning working!",
+                "model": "xtts-v2 (via Replicate)",
+                "test_audio": audio_url
+            }
+        else:
+            return {
+                "status": "error",
+                "message": "Failed to generate audio"
+            }
     except Exception as e:
         return {
             "status": "error",

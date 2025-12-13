@@ -1,4 +1,5 @@
-# ---- Python FastAPI backend for LawBot 360 ----
+# ---- Python FastAPI backend for LawBot 360 with Replicate ----
+# Super simple - no torch, no scipy, no numpy issues!
 FROM python:3.11.9
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -8,26 +9,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install system dependencies for audio processing
+# Install minimal system dependencies (no audio processing libraries needed!)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     tzdata \
-    ffmpeg \
-    libsndfile1 \
-    portaudio19-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements file
 COPY requirements.txt .
 
-# Install PyTorch CPU versions from specific index
-RUN pip install torch==2.5.1 torchaudio==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu
-
-# Remove PyTorch lines from requirements to avoid conflicts
-RUN sed -i '/^torch==/d; /^torchaudio==/d; /^torchvision==/d' requirements.txt
-
-# Install remaining dependencies
+# Install Python dependencies (super fast - no torch!)
 RUN pip install -r requirements.txt
 
 # Copy application code
@@ -37,5 +29,5 @@ COPY . .
 ENV PORT=8080
 EXPOSE 8080
 
-# Start FastAPI (same as VoiceFusion)
+# Start FastAPI
 CMD ["sh","-c","uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
