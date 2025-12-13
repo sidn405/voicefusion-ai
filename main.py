@@ -10,7 +10,6 @@ from twilio.rest import Client
 import os
 import resend
 from openai import OpenAI
-import replicate
 import requests
 import uuid
 from pathlib import Path
@@ -25,7 +24,6 @@ AUDIO_DIR.mkdir(exist_ok=True)
 # Initialize clients
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 resend.api_key = os.getenv("RESEND_API_KEY")
-replicate_client = replicate.Client(api_token=os.getenv("REPLICATE_API_TOKEN"))
 
 twilio_client = Client(
     os.getenv("TWILIO_ACCOUNT_SID"),
@@ -57,64 +55,94 @@ def get_reference_voice_url() -> str:
 
 
 def generate_speech(text: str) -> str:
-    """Generate speech with cloned voice using Replicate API (no scipy issues!)"""
+    """Generate speech with cloned voice using Replicate REST API (avoids SDK issues!)"""
     
-    print(f"🎙️ Generating speech via Replicate: '{text[:50]}...'")
+    print(f"🎙️ Generating speech via Replicate REST API: '{text[:50]}...'")
     
     try:
         # Use publicly accessible URL for reference voice
-        # This avoids any file upload serialization issues
         reference_voice_url = f"{SERVER_URL}/reference-voice"
         
         print(f"🎤 Using reference voice from: {reference_voice_url}")
         
-        # Create prediction using Replicate API
-        # Use the predictions API instead of .run() to have more control
-        prediction = replicate_client.predictions.create(
-            version="684bc3855b37866c0c65add2ff39c78f3dea3f4ff103a436465326e0f438d55e",
-            input={
+        # Call Replicate REST API directly (avoid Python SDK serialization issues)
+        api_token = os.getenv("REPLICATE_API_TOKEN")
+        
+        # Create prediction via REST API
+        headers = {
+            "Authorization": f"Token {api_token}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "version": "684bc3855b37866c0c65add2ff39c78f3dea3f4ff103a436465326e0f438d55e",
+            "input": {
                 "text": text,
-                "speaker": reference_voice_url,  # Public URL - no serialization issues!
+                "speaker": reference_voice_url,  # Public URL
                 "language": "en"
             }
+        }
+        
+        print(f"🚀 Sending prediction request to Replicate...")
+        response = requests.post(
+            "https://api.replicate.com/v1/predictions",
+            headers=headers,
+            json=payload,
+            timeout=10
         )
+        response.raise_for_status()
         
-        # Wait for prediction to complete
-        print(f"⏳ Waiting for Replicate to generate audio...")
-        prediction.wait()
+        prediction = response.json()
+        prediction_id = prediction["id"]
+        prediction_url = prediction["urls"]["get"]
         
-        if prediction.status == "succeeded":
-            # Get output URL
-            output_url = prediction.output
+        print(f"⏳ Waiting for prediction {prediction_id}...")
+        
+        # Poll for completion
+        max_attempts = 60  # 60 seconds timeout
+        for attempt in range(max_attempts):
+            import time
+            time.sleep(1)
             
-            # Download generated audio
-            audio_id = str(uuid.uuid4())
-            output_file = AUDIO_DIR / f"{audio_id}.wav"
+            status_response = requests.get(prediction_url, headers=headers, timeout=10)
+            status_response.raise_for_status()
+            status_data = status_response.json()
             
-            print(f"📥 Downloading audio from: {output_url}")
-            audio_response = requests.get(output_url, timeout=60)
-            audio_response.raise_for_status()
-            
-            with open(output_file, "wb") as f:
-                f.write(audio_response.content)
-            
-            # Return public URL for Twilio to play
-            audio_url = f"{SERVER_URL}/audio/{audio_id}.wav"
-            print(f"✅ Audio ready: {audio_url}")
-            
-            return audio_url
-        else:
-            print(f"❌ Replicate prediction failed: {prediction.status}")
-            if prediction.error:
-                print(f"❌ Error details: {prediction.error}")
-            return ""
+            if status_data["status"] == "succeeded":
+                output_url = status_data["output"]
+                print(f"✅ Replicate succeeded! Output: {output_url}")
+                
+                # Download generated audio
+                audio_id = str(uuid.uuid4())
+                output_file = AUDIO_DIR / f"{audio_id}.wav"
+                
+                print(f"📥 Downloading audio...")
+                audio_response = requests.get(output_url, timeout=60)
+                audio_response.raise_for_status()
+                
+                with open(output_file, "wb") as f:
+                    f.write(audio_response.content)
+                
+                # Return public URL for Twilio to play
+                audio_url = f"{SERVER_URL}/audio/{audio_id}.wav"
+                print(f"✅ Audio ready: {audio_url}")
+                
+                return audio_url
+                
+            elif status_data["status"] == "failed":
+                print(f"❌ Replicate prediction failed: {status_data.get('error')}")
+                return ""
+                
+            # Still processing, continue polling
+        
+        print(f"❌ Replicate timeout after {max_attempts} seconds")
+        return ""
         
     except Exception as e:
         print(f"❌ Replicate error: {e}")
         print(f"❌ Error type: {type(e).__name__}")
         import traceback
         traceback.print_exc()
-        # Fallback: return empty string (will use Twilio voice)
         return ""
 
 
