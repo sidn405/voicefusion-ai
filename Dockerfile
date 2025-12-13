@@ -23,19 +23,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 
 # CRITICAL FIX: Install compatible numpy/scipy versions FIRST
-# 1. Install numpy FIRST (specific compatible version)
+# Install numpy FIRST
 RUN pip install numpy==1.26.4
 
-# 2. Install PyTorch 2.1.0 (more stable than 2.5.1)
+# Then PyTorch 2.1.0 (not 2.5.1!)
 RUN pip install torch==2.1.0 torchaudio==2.1.0 --index-url https://download.pytorch.org/whl/cpu
 
-# 3. Install scipy AFTER numpy is established
+# Then scipy
 RUN pip install scipy==1.11.4
 
-# 4. Remove from requirements to prevent reinstalling
+# Then everything else
 RUN sed -i '/^torch==/d; /^torchaudio==/d; /^torchvision==/d; /^numpy/d; /^scipy/d' requirements.txt
-
-# 5. Install everything else (TTS, etc.)
 RUN pip install -r requirements.txt
 
 # Copy application code
