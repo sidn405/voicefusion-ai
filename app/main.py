@@ -10,7 +10,6 @@ from twilio.rest import Client
 import os
 import resend
 from openai import OpenAI
-import replicate
 import requests
 import uuid
 from pathlib import Path
@@ -25,7 +24,6 @@ AUDIO_DIR.mkdir(exist_ok=True)
 # Initialize clients
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 resend.api_key = os.getenv("RESEND_API_KEY")
-replicate_client = replicate.Client(api_token=os.getenv("REPLICATE_API_TOKEN"))
 
 twilio_client = Client(
     os.getenv("TWILIO_ACCOUNT_SID"),
@@ -37,51 +35,114 @@ HUMAN_PHONE = os.getenv("PHONE")
 REFERENCE_VOICE = "reference_voice.wav"
 SERVER_URL = os.getenv("SERVER_URL", "https://voicefusion-ai-production.up.railway.app")
 
+# Cache for reference voice URL (upload once, reuse)
+reference_voice_url = None
+
 # Conversation memory
 conversations = {}
 
 
-def generate_speech(text: str) -> str:
-    """Generate speech with cloned voice using Replicate API (no scipy issues!)"""
+def get_reference_voice_url() -> str:
+    """Upload reference voice to Replicate and get URL (cache it)"""
+    global reference_voice_url
     
-    print(f"🎙️ Generating speech via Replicate: '{text[:50]}...'")
+    if reference_voice_url is None:
+        # Serve reference voice from our server
+        reference_voice_url = f"{SERVER_URL}/reference-voice"
+        print(f"🎤 Using reference voice URL: {reference_voice_url}")
+    
+    return reference_voice_url
+
+
+def generate_speech(text: str) -> str:
+    """Generate speech with cloned voice using Replicate REST API (avoids SDK issues!)"""
+    
+    print(f"🎙️ Generating speech via Replicate REST API: '{text[:50]}...'")
     
     try:
-        # Upload reference voice if needed (first time)
-        with open(REFERENCE_VOICE, "rb") as voice_file:
-            voice_data = voice_file.read()
+        # Use publicly accessible URL for reference voice
+        reference_voice_url = f"{SERVER_URL}/reference-voice"
         
-        # Generate speech using Replicate's XTTS-v2
-        output = replicate_client.run(
-            "lucataco/xtts-v2:684bc3855b37866c0c65add2ff39c78f3dea3f4ff103a436465326e0f438d55e",
-            input={
+        print(f"🎤 Using reference voice from: {reference_voice_url}")
+        
+        # Call Replicate REST API directly (avoid Python SDK serialization issues)
+        api_token = os.getenv("REPLICATE_API_TOKEN")
+        
+        # Create prediction via REST API
+        headers = {
+            "Authorization": f"Token {api_token}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "version": "684bc3855b37866c0c65add2ff39c78f3dea3f4ff103a436465326e0f438d55e",
+            "input": {
                 "text": text,
-                "speaker": voice_data,  # Your voice sample
-                "language": "en",
-                "cleanup_voice": False
+                "speaker": reference_voice_url,  # Public URL
+                "language": "en"
             }
+        }
+        
+        print(f"🚀 Sending prediction request to Replicate...")
+        response = requests.post(
+            "https://api.replicate.com/v1/predictions",
+            headers=headers,
+            json=payload,
+            timeout=10
         )
+        response.raise_for_status()
         
-        # Download generated audio
-        audio_id = str(uuid.uuid4())
-        output_file = AUDIO_DIR / f"{audio_id}.wav"
+        prediction = response.json()
+        prediction_id = prediction["id"]
+        prediction_url = prediction["urls"]["get"]
         
-        # Replicate returns a URL to the audio
-        audio_response = requests.get(output, timeout=30)
-        audio_response.raise_for_status()
+        print(f"⏳ Waiting for prediction {prediction_id}...")
         
-        with open(output_file, "wb") as f:
-            f.write(audio_response.content)
+        # Poll for completion
+        max_attempts = 60  # 60 seconds timeout
+        for attempt in range(max_attempts):
+            import time
+            time.sleep(1)
+            
+            status_response = requests.get(prediction_url, headers=headers, timeout=10)
+            status_response.raise_for_status()
+            status_data = status_response.json()
+            
+            if status_data["status"] == "succeeded":
+                output_url = status_data["output"]
+                print(f"✅ Replicate succeeded! Output: {output_url}")
+                
+                # Download generated audio
+                audio_id = str(uuid.uuid4())
+                output_file = AUDIO_DIR / f"{audio_id}.wav"
+                
+                print(f"📥 Downloading audio...")
+                audio_response = requests.get(output_url, timeout=60)
+                audio_response.raise_for_status()
+                
+                with open(output_file, "wb") as f:
+                    f.write(audio_response.content)
+                
+                # Return public URL for Twilio to play
+                audio_url = f"{SERVER_URL}/audio/{audio_id}.wav"
+                print(f"✅ Audio ready: {audio_url}")
+                
+                return audio_url
+                
+            elif status_data["status"] == "failed":
+                print(f"❌ Replicate prediction failed: {status_data.get('error')}")
+                return ""
+                
+            # Still processing, continue polling
         
-        # Return public URL for Twilio to play
-        audio_url = f"{SERVER_URL}/audio/{audio_id}.wav"
-        print(f"✅ Audio ready: {audio_url}")
-        
-        return audio_url
+        print(f"❌ Replicate timeout after {max_attempts} seconds")
+        return ""
         
     except Exception as e:
         print(f"❌ Replicate error: {e}")
-        # Fallback: return empty string (will use Twilio voice)
+        print(f"❌ Error type: {type(e).__name__}")
+        import traceback
+        traceback.print_exc()
         return ""
 
 
@@ -164,6 +225,14 @@ async def serve_audio(filename: str):
     return {"error": "Audio file not found"}
 
 
+@app.get("/reference-voice")
+async def serve_reference_voice():
+    """Serve reference voice file to Replicate"""
+    if os.path.exists(REFERENCE_VOICE):
+        return FileResponse(REFERENCE_VOICE, media_type="audio/wav")
+    return {"error": "Reference voice not found"}
+
+
 @app.post("/voice/incoming")
 async def handle_incoming_call(request: Request):
     """Handle incoming calls with YOUR cloned voice"""
@@ -182,7 +251,14 @@ async def handle_incoming_call(request: Request):
                     "Press 1 to speak with me, or press 2 to transfer to a human immediately.")
     
     greeting_url = generate_speech(greeting_text)
-    response.play(greeting_url)
+    
+    if greeting_url:
+        # Use your cloned voice
+        response.play(greeting_url)
+    else:
+        # Fallback to Twilio voice if Replicate fails
+        print("⚠️ Falling back to Twilio voice")
+        response.say(greeting_text, voice="Polly.Joanna")
     
     # Gather choice
     gather = Gather(
@@ -194,8 +270,14 @@ async def handle_incoming_call(request: Request):
     response.append(gather)
     
     # Default to human
-    fallback_url = generate_speech("I didn't receive a selection. Transferring you to a human now.")
-    response.play(fallback_url)
+    fallback_text = "I didn't receive a selection. Transferring you to a human now."
+    fallback_url = generate_speech(fallback_text)
+    
+    if fallback_url:
+        response.play(fallback_url)
+    else:
+        response.say(fallback_text, voice="Polly.Joanna")
+    
     response.dial(HUMAN_PHONE)
     
     return PlainTextResponse(content=str(response), media_type="application/xml")
