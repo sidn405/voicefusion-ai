@@ -23,16 +23,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 
 # CRITICAL FIX: Install compatible numpy/scipy versions FIRST
-# This prevents the ufunc error
-RUN pip install numpy==1.24.3 scipy==1.10.1
+# 1. Install numpy FIRST (specific compatible version)
+RUN pip install numpy==1.26.4
 
-# Install PyTorch CPU versions from specific index
-RUN pip install torch==2.5.1 torchaudio==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu
+# 2. Install PyTorch 2.1.0 (more stable than 2.5.1)
+RUN pip install torch==2.1.0 torchaudio==2.1.0 --index-url https://download.pytorch.org/whl/cpu
 
-# Remove conflicting lines from requirements to avoid reinstalling
-RUN sed -i '/^torch==/d; /^torchaudio==/d; /^torchvision==/d; /^numpy==/d; /^scipy==/d' requirements.txt
+# 3. Install scipy AFTER numpy is established
+RUN pip install scipy==1.11.4
 
-# Install remaining dependencies
+# 4. Remove from requirements to prevent reinstalling
+RUN sed -i '/^torch==/d; /^torchaudio==/d; /^torchvision==/d; /^numpy/d; /^scipy/d' requirements.txt
+
+# 5. Install everything else (TTS, etc.)
 RUN pip install -r requirements.txt
 
 # Copy application code
