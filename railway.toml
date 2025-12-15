@@ -1,0 +1,7 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Let Dockerfile handle the start command
+# This ensures main:app is used (not app.main:app)
