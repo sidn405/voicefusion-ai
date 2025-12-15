@@ -34,6 +34,7 @@ twilio_client = Client(
 HUMAN_PHONE = os.getenv("PHONE")
 REFERENCE_VOICE = "reference_voice.wav"
 SERVER_URL = os.getenv("SERVER_URL", "https://voicefusion-ai-production.up.railway.app")
+TTS_SERVER_URL = os.getenv("TTS_SERVICE_URL")
 
 # Cache for reference voice URL (upload once, reuse)
 reference_voice_url = None
@@ -84,10 +85,10 @@ def generate_speech(text: str) -> str:
         }
         
         print(f"🚀 Sending prediction request to Replicate...")
+        # Call TTS service via internal Railway network
         response = requests.post(
-            "https://api.replicate.com/v1/predictions",
-            headers=headers,
-            json=payload,
+            f"{TTS_SERVER_URL}/generate",
+            json={"text": text},
             timeout=10
         )
         response.raise_for_status()
