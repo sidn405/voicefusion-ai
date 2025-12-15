@@ -5,25 +5,32 @@ FROM python:3.11.9
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=on \
-    PIP_NO_CACHE_DIR=off
+    PIP_NO_CACHE_DIR=on
 
 WORKDIR /app
 
-# Install minimal system dependencies (no audio processing libraries needed!)
+# Install system dependencies for pyttsx3 and espeak
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     tzdata \
-    && rm -rf /var/lib/apt/lists/*
+    espeak \
+    espeak-ng \
+    libespeak1 \
+    libespeak-dev \
+    alsa-utils \
+    libportaudio2 \
+ && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements file
+# Install Python dependencies
 COPY requirements.txt .
-
-# Install Python dependencies (super fast - no torch!)
-RUN pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY . .
+COPY main.py .
+
+# Create audio directory
+RUN mkdir -p /tmp/audio
 
 # Default port Railway exposes
 ENV PORT=8080

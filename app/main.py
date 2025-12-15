@@ -36,16 +36,33 @@ SERVER_URL = os.getenv("SERVER_URL", "https://voicefusion-ai-production.up.railw
 
 # Initialize lightweight TTS
 print("🎤 Initializing lightweight TTS...")
-tts_engine = pyttsx3.init()
+try:
+    # Try to initialize with espeak driver explicitly
+    tts_engine = pyttsx3.init(driverName='espeak')
+    print("✅ Using espeak driver")
+except Exception as e:
+    print(f"⚠️  espeak failed: {e}, trying default driver...")
+    try:
+        tts_engine = pyttsx3.init()
+        print("✅ Using default driver")
+    except Exception as e2:
+        print(f"❌ TTS initialization failed: {e2}")
+        print("⚠️  TTS will use fallback (Twilio voice)")
+        tts_engine = None
 
-# Configure voice for sales calls
-voices = tts_engine.getProperty('voices')
-if len(voices) > 1:
-    tts_engine.setProperty('voice', voices[1].id)  # Female voice
-tts_engine.setProperty('rate', 145)  # Slightly slower for clarity
-tts_engine.setProperty('volume', 0.95)  # Clear and confident
-
-print("✅ TTS ready")
+# Configure voice for sales calls (if TTS initialized successfully)
+if tts_engine:
+    try:
+        voices = tts_engine.getProperty('voices')
+        if voices and len(voices) > 1:
+            tts_engine.setProperty('voice', voices[1].id)  # Female voice
+        tts_engine.setProperty('rate', 145)  # Slightly slower for clarity
+        tts_engine.setProperty('volume', 0.95)  # Clear and confident
+        print("✅ TTS ready")
+    except Exception as e:
+        print(f"⚠️  TTS configuration warning: {e}")
+else:
+    print("⚠️  Running without TTS engine - will use Twilio voice fallback")
 
 # Conversation memory
 conversations = {}
@@ -55,6 +72,11 @@ def generate_speech(text: str) -> str:
     """Generate speech with lightweight pyttsx3 (instant!)"""
     
     print(f"🎙️ Generating speech: '{text[:50]}...'")
+    
+    # If TTS engine failed to initialize, return empty string (will trigger Twilio fallback)
+    if tts_engine is None:
+        print("⚠️  TTS engine not available, using Twilio voice fallback")
+        return ""
     
     try:
         # Truncate if too long
@@ -162,7 +184,8 @@ async def root():
     return {
         "status": "ok",
         "service": "LawBot 360 Voice Sales Agent",
-        "tts": "lightweight (pyttsx3)",
+        "tts": "pyttsx3" if tts_engine else "twilio-fallback",
+        "tts_working": tts_engine is not None,
         "ai": "OpenAI GPT-4",
         "human_phone": HUMAN_PHONE,
         "deployment": "railway"
@@ -504,6 +527,15 @@ async def fallback_choice(request: Request):
 @app.get("/test-tts")
 async def test_tts():
     """Test endpoint to verify TTS works"""
+    if tts_engine is None:
+        return {
+            "status": "fallback",
+            "message": "pyttsx3 not available, using Twilio voice",
+            "engine": "twilio-polly",
+            "quality": "Excellent (Amazon Polly)",
+            "note": "This is fine! Twilio voice works great for sales calls."
+        }
+    
     try:
         test_text = "This is a test of the lightweight text to speech system. It's fast and reliable!"
         audio_url = generate_speech(test_text)
@@ -511,20 +543,22 @@ async def test_tts():
         if audio_url:
             return {
                 "status": "success",
-                "message": "Lightweight TTS working!",
-                "engine": "pyttsx3",
+                "message": "pyttsx3 TTS working!",
+                "engine": "pyttsx3 (espeak)",
                 "test_audio": audio_url,
                 "speed": "< 1 second"
             }
         else:
             return {
                 "status": "error",
-                "message": "Failed to generate audio"
+                "message": "TTS generation failed",
+                "note": "Will fallback to Twilio voice in calls"
             }
     except Exception as e:
         return {
             "status": "error",
-            "message": str(e)
+            "message": str(e),
+            "note": "Will fallback to Twilio voice in calls"
         }
 
 
