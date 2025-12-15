@@ -1,0 +1,15 @@
+# TTS Service Requirements
+Flask==3.0.0
+flask-cors==4.0.0
+gunicorn==21.2.0
+
+# TTS Dependencies
+TTS==0.22.0
+torch==2.5.1
+torchaudio==2.5.1
+
+# Note: This will likely still have scipy/numpy issues in Railway
+# If it fails, we'll need to either:
+# 1. Use ngrok (free, works immediately)
+# 2. Deploy to VPS ($5/month)
+# 3. Try pre-generating audio files instead of real-time

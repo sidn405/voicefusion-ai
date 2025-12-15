@@ -1,0 +1,287 @@
+"""
+LawBot 360 - Full AI Conversation System
+Calls YOUR TTS server for real-time voice cloning
+"""
+
+from fastapi import FastAPI, Request
+from fastapi.responses import PlainTextResponse, FileResponse
+from twilio.twiml.voice_response import VoiceResponse, Dial, Gather
+from twilio.rest import Client
+import os
+import resend
+from openai import OpenAI
+import requests
+import uuid
+from pathlib import Path
+
+app = FastAPI(title="LawBot 360 AI Sales Agent")
+
+# Audio directory
+AUDIO_DIR = Path("/tmp/audio")
+AUDIO_DIR.mkdir(exist_ok=True)
+
+# Initialize clients
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+resend.api_key = os.getenv("RESEND_API_KEY")
+twilio_client = Client(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
+
+# Configuration
+HUMAN_PHONE = os.getenv("PHONE")
+SERVER_URL = os.getenv("SERVER_URL")
+TTS_SERVER_URL = os.getenv("TTS_SERVER_URL")  # Your machine via ngrok!
+
+# Conversation memory (in production: use Redis)
+conversations = {}
+
+
+def generate_speech(text: str) -> str:
+    """Generate speech with YOUR cloned voice via your TTS server"""
+    
+    print(f"🎙️ Calling your TTS server: '{text[:60]}...'")
+    
+    try:
+        # Call YOUR TTS server (running on your machine)
+        response = requests.post(
+            f"{TTS_SERVER_URL}/generate",
+            json={"text": text},
+            timeout=8  # Must be fast for Twilio!
+        )
+        
+        if response.status_code != 200:
+            print(f"❌ TTS server error: {response.status_code}")
+            return ""
+        
+        # Save audio
+        audio_id = str(uuid.uuid4())
+        output_file = AUDIO_DIR / f"{audio_id}.wav"
+        
+        with open(output_file, "wb") as f:
+            f.write(response.content)
+        
+        audio_url = f"{SERVER_URL}/audio/{audio_id}.wav"
+        print(f"✅ Audio ready")
+        
+        return audio_url
+        
+    except Exception as e:
+        print(f"❌ TTS error: {e}")
+        return ""
+
+
+def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
+    """Get AI-generated response based on conversation context"""
+    
+    # Get conversation history
+    if call_sid not in conversations:
+        conversations[call_sid] = {
+            "history": [],
+            "stage": "greeting",
+            "client_name": "",
+            "pain_points": []
+        }
+    
+    conv = conversations[call_sid]
+    
+    # Add user input to history
+    if user_input:
+        conv["history"].append({"role": "user", "content": user_input})
+    
+    # System prompt for AI sales agent
+    system_prompt = """You are a sales expert for 4D Gaming, selling LawBot 360 ($25,000).
+
+CRITICAL RULES:
+- Keep responses VERY SHORT (1-2 sentences max) - this is a PHONE CALL
+- Sound natural and conversational - like a real person
+- Listen and respond personally to what they say
+- Move conversation toward closing the sale
+- If they want human, transfer immediately
+- At any point they can press * to transfer
+
+YOUR GOAL: Close the $25k sale or get them on call with human closer.
+
+PRICING:
+- $25,000 one-time investment
+- Most firms ROI in 30-60 days
+- $7,500 down payment to start
+
+Be brief, natural, and persuasive."""
+    
+    # Generate AI response
+    messages = [{"role": "system", "content": system_prompt}]
+    messages.extend(conv["history"])
+    
+    response = openai_client.chat.completions.create(
+        model="gpt-4",
+        messages=messages,
+        max_tokens=100,  # Keep it short!
+        temperature=0.7
+    )
+    
+    ai_text = response.choices[0].message.content
+    
+    # Add to history
+    conv["history"].append({"role": "assistant", "content": ai_text})
+    
+    return ai_text
+
+
+@app.get("/")
+async def root():
+    return {
+        "status": "ok",
+        "service": "LawBot 360 - Full AI Conversation",
+        "tts_server": TTS_SERVER_URL
+    }
+
+
+@app.get("/audio/{filename}")
+async def serve_audio(filename: str):
+    """Serve generated audio to Twilio"""
+    audio_file = AUDIO_DIR / filename
+    if audio_file.exists():
+        return FileResponse(audio_file, media_type="audio/wav")
+    return {"error": "Not found"}
+
+
+@app.post("/voice/incoming")
+async def handle_incoming_call(request: Request):
+    """Handle incoming calls with AI conversation"""
+    
+    form_data = await request.form()
+    from_number = form_data.get('From')
+    call_sid = form_data.get('CallSid')
+    
+    print(f"📞 Call from {from_number}")
+    
+    response = VoiceResponse()
+    
+    # AI greeting
+    greeting_text = "Hi! This is an AI sales assistant from 4D Gaming about LawBot 360. Press 1 to speak with me, or press 2 for a human."
+    
+    greeting_url = generate_speech(greeting_text)
+    
+    if greeting_url:
+        response.play(greeting_url)
+    else:
+        response.say(greeting_text, voice="Polly.Joanna")
+    
+    # Gather choice
+    gather = Gather(num_digits=1, action="/voice/handle-choice", method="POST", timeout=10)
+    response.append(gather)
+    
+    # No response → transfer
+    fallback_text = "I didn't receive a selection. Transferring you now."
+    fallback_url = generate_speech(fallback_text)
+    
+    if fallback_url:
+        response.play(fallback_url)
+    else:
+        response.say(fallback_text, voice="Polly.Joanna")
+    
+    response.dial(HUMAN_PHONE)
+    
+    return PlainTextResponse(content=str(response), media_type="application/xml")
+
+
+@app.post("/voice/handle-choice")
+async def handle_choice(request: Request):
+    """Handle user's menu choice"""
+    
+    form_data = await request.form()
+    digits = form_data.get('Digits')
+    call_sid = form_data.get('CallSid')
+    from_number = form_data.get('From')
+    
+    print(f"📱 Choice: {digits} from {from_number}")
+    
+    response = VoiceResponse()
+    
+    if digits == "1":
+        # Start AI conversation
+        ai_text = get_ai_response(call_sid, "I want to learn more", "discovery")
+        
+        audio_url = generate_speech(ai_text)
+        
+        if audio_url:
+            response.play(audio_url)
+        else:
+            response.say(ai_text, voice="Polly.Joanna")
+        
+        # Continue conversation
+        gather = Gather(input='speech dtmf', action="/voice/conversation", method="POST", timeout=5)
+        response.append(gather)
+        
+    elif digits == "2":
+        # Transfer to human
+        transfer_text = "Transferring you to a specialist now."
+        transfer_url = generate_speech(transfer_text)
+        
+        if transfer_url:
+            response.play(transfer_url)
+        else:
+            response.say(transfer_text, voice="Polly.Joanna")
+        
+        response.dial(HUMAN_PHONE)
+    else:
+        # Invalid choice
+        response.say("Invalid choice. Transferring you to a human.", voice="Polly.Joanna")
+        response.dial(HUMAN_PHONE)
+    
+    return PlainTextResponse(content=str(response), media_type="application/xml")
+
+
+@app.post("/voice/conversation")
+async def conversation(request: Request):
+    """Handle ongoing AI conversation"""
+    
+    form_data = await request.form()
+    speech_result = form_data.get('SpeechResult', '')
+    call_sid = form_data.get('CallSid')
+    digits = form_data.get('Digits', '')
+    
+    print(f"💬 User said: {speech_result}")
+    
+    response = VoiceResponse()
+    
+    # Check for * (transfer request)
+    if digits == "*":
+        transfer_text = "Connecting you with a specialist."
+        transfer_url = generate_speech(transfer_text)
+        
+        if transfer_url:
+            response.play(transfer_url)
+        else:
+            response.say(transfer_text, voice="Polly.Joanna")
+        
+        response.dial(HUMAN_PHONE)
+        return PlainTextResponse(content=str(response), media_type="application/xml")
+    
+    # Get AI response
+    ai_text = get_ai_response(call_sid, speech_result, "conversation")
+    
+    audio_url = generate_speech(ai_text)
+    
+    if audio_url:
+        response.play(audio_url)
+    else:
+        response.say(ai_text, voice="Polly.Joanna")
+    
+    # Continue conversation (or end if closing)
+    gather = Gather(input='speech dtmf', action="/voice/conversation", method="POST", timeout=5)
+    response.append(gather)
+    
+    # Timeout fallback
+    timeout_text = "Are you still there? Press star to speak with a human."
+    timeout_url = generate_speech(timeout_text)
+    
+    if timeout_url:
+        response.play(timeout_url)
+    else:
+        response.say(timeout_text, voice="Polly.Joanna")
+    
+    return PlainTextResponse(content=str(response), media_type="application/xml")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8080)
