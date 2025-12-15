@@ -1,23 +1,23 @@
 """
-LawBot 360 Voice Sales Agent - FastAPI Backend with Replicate Voice Cloning
-Handles Twilio webhooks with dynamic AI conversation using your cloned voice via Replicate API
+LawBot 360 Voice Sales Agent - FastAPI Backend with Lightweight TTS
+Handles Twilio webhooks with dynamic AI conversation using pyttsx3
 """
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse, FileResponse
-from twilio.twiml.voice_response import VoiceResponse, Dial, Gather
+from twilio.twiml.voice_response import VoiceResponse, Gather
 from twilio.rest import Client
 import os
 import resend
 from openai import OpenAI
-import requests
 import uuid
 from pathlib import Path
+import pyttsx3
 
 # Initialize FastAPI
 app = FastAPI(title="LawBot 360 Voice Sales Agent")
 
-# Create audio directory for downloaded files
+# Create audio directory
 AUDIO_DIR = Path("/tmp/audio")
 AUDIO_DIR.mkdir(exist_ok=True)
 
@@ -32,118 +32,51 @@ twilio_client = Client(
 
 # Configuration
 HUMAN_PHONE = os.getenv("PHONE")
-REFERENCE_VOICE = "reference_voice.wav"
 SERVER_URL = os.getenv("SERVER_URL", "https://voicefusion-ai-production.up.railway.app")
-TTS_SERVER_URL = os.getenv("TTS_SERVICE_URL")
 
-# Cache for reference voice URL (upload once, reuse)
-reference_voice_url = None
+# Initialize lightweight TTS
+print("🎤 Initializing lightweight TTS...")
+tts_engine = pyttsx3.init()
+
+# Configure voice for sales calls
+voices = tts_engine.getProperty('voices')
+if len(voices) > 1:
+    tts_engine.setProperty('voice', voices[1].id)  # Female voice
+tts_engine.setProperty('rate', 145)  # Slightly slower for clarity
+tts_engine.setProperty('volume', 0.95)  # Clear and confident
+
+print("✅ TTS ready")
 
 # Conversation memory
 conversations = {}
 
 
-def get_reference_voice_url() -> str:
-    """Upload reference voice to Replicate and get URL (cache it)"""
-    global reference_voice_url
-    
-    if reference_voice_url is None:
-        # Serve reference voice from our server
-        reference_voice_url = f"{SERVER_URL}/reference-voice"
-        print(f"🎤 Using reference voice URL: {reference_voice_url}")
-    
-    return reference_voice_url
-
-
 def generate_speech(text: str) -> str:
-    """Generate speech with cloned voice using Replicate REST API (avoids SDK issues!)"""
+    """Generate speech with lightweight pyttsx3 (instant!)"""
     
-    print(f"🎙️ Generating speech via Replicate REST API: '{text[:50]}...'")
+    print(f"🎙️ Generating speech: '{text[:50]}...'")
     
     try:
-        # Use publicly accessible URL for reference voice
-        reference_voice_url = f"{SERVER_URL}/reference-voice"
+        # Truncate if too long
+        if len(text) > 500:
+            text = text[:500]
         
-        print(f"🎤 Using reference voice from: {reference_voice_url}")
+        # Generate unique filename
+        audio_id = str(uuid.uuid4())
+        output_file = AUDIO_DIR / f"{audio_id}.wav"
         
-        # Call Replicate REST API directly (avoid Python SDK serialization issues)
-        api_token = os.getenv("REPLICATE_API_TOKEN")
+        # Generate audio (fast!)
+        tts_engine.save_to_file(text, str(output_file))
+        tts_engine.runAndWait()
         
-        # Create prediction via REST API
-        headers = {
-            "Authorization": f"Token {api_token}",
-            "Content-Type": "application/json"
-        }
+        # Return public URL for Twilio
+        audio_url = f"{SERVER_URL}/audio/{audio_id}.wav"
+        print(f"✅ Audio ready: {audio_url}")
         
-        payload = {
-            "version": "684bc3855b37866c0c65add2ff39c78f3dea3f4ff103a436465326e0f438d55e",
-            "input": {
-                "text": text,
-                "speaker": reference_voice_url,  # Public URL
-                "language": "en"
-            }
-        }
-        
-        print(f"🚀 Sending prediction request to Replicate...")
-        # Call TTS service via internal Railway network
-        response = requests.post(
-            f"{TTS_SERVER_URL}/generate",
-            json={"text": text},
-            timeout=10
-        )
-        response.raise_for_status()
-        
-        prediction = response.json()
-        prediction_id = prediction["id"]
-        prediction_url = prediction["urls"]["get"]
-        
-        print(f"⏳ Waiting for prediction {prediction_id}...")
-        
-        # Poll for completion
-        max_attempts = 60  # 60 seconds timeout
-        for attempt in range(max_attempts):
-            import time
-            time.sleep(1)
-            
-            status_response = requests.get(prediction_url, headers=headers, timeout=10)
-            status_response.raise_for_status()
-            status_data = status_response.json()
-            
-            if status_data["status"] == "succeeded":
-                output_url = status_data["output"]
-                print(f"✅ Replicate succeeded! Output: {output_url}")
-                
-                # Download generated audio
-                audio_id = str(uuid.uuid4())
-                output_file = AUDIO_DIR / f"{audio_id}.wav"
-                
-                print(f"📥 Downloading audio...")
-                audio_response = requests.get(output_url, timeout=60)
-                audio_response.raise_for_status()
-                
-                with open(output_file, "wb") as f:
-                    f.write(audio_response.content)
-                
-                # Return public URL for Twilio to play
-                audio_url = f"{SERVER_URL}/audio/{audio_id}.wav"
-                print(f"✅ Audio ready: {audio_url}")
-                
-                return audio_url
-                
-            elif status_data["status"] == "failed":
-                print(f"❌ Replicate prediction failed: {status_data.get('error')}")
-                return ""
-                
-            # Still processing, continue polling
-        
-        print(f"❌ Replicate timeout after {max_attempts} seconds")
-        return ""
+        return audio_url
         
     except Exception as e:
-        print(f"❌ Replicate error: {e}")
-        print(f"❌ Error type: {type(e).__name__}")
-        import traceback
-        traceback.print_exc()
+        print(f"❌ TTS error: {e}")
         return ""
 
 
@@ -156,28 +89,46 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
             "history": [],
             "stage": "greeting",
             "client_name": None,
-            "pain_points": []
+            "firm_name": None,
+            "pain_points": [],
+            "interested": False
         }
     
     conv = conversations[call_sid]
     conv["history"].append({"role": "user", "content": user_input})
     
-    # Build system prompt based on stage
-    system_prompt = f"""You are a sales expert for 4D Gaming, selling LawBot 360 ($25,000 AI client intake system).
+    # Build system prompt for sales bot
+    system_prompt = f"""You are a professional sales representative for LawBot 360, an AI client intake system for law firms.
 
 Current stage: {stage}
 Client name: {conv.get('client_name', 'Unknown')}
+Firm: {conv.get('firm_name', 'Unknown')}
+
+YOUR GOAL: Sell LawBot 360 ($25,000 base price, $7,500 down payment)
 
 CRITICAL RULES:
 1. Keep responses VERY SHORT (1-2 sentences max) - this is a phone call
-2. Sound natural and conversational - like a real person calling
+2. Sound natural and conversational - like a real sales person
 3. Listen to what they say and respond personally
-4. Move the conversation toward closing the sale
+4. Move the conversation toward discovery → pain points → solution → close
 5. If they want human, acknowledge and we'll transfer
-6. Use their name when you know it
-7. Be confident but not pushy - you're selling a $25k solution
+6. Be confident but consultative, not pushy
+7. Use their name when you know it
 
-PRICING: $25,000 one-time, $7,500 down payment to start
+PRODUCT: LawBot 360
+- 24/7 AI-powered client intake chatbot
+- Automatic lead qualification and consultation scheduling
+- Integrates with Clio, Salesforce, MyCase
+- Customizable for any practice area
+- Base price: $25,000 one-time, $7,500 down payment to start
+
+CONVERSATION FLOW:
+1. Opening: "Hi! Quick question - are you losing leads outside business hours?"
+2. Discovery: Ask about their current intake process
+3. Pain points: Identify what's not working
+4. Solution: Show how LawBot 360 solves their specific problems
+5. Pricing: Discuss investment when they're interested
+6. Close: Get commitment or schedule demo
 
 Your goal: Have a natural conversation that leads to a sale or human handoff.
 """
@@ -210,10 +161,11 @@ async def root():
     """Health check"""
     return {
         "status": "ok",
-        "service": "LawBot 360 Voice Sales Agent - Replicate Voice Cloning",
-        "voice_cloning": "enabled (via Replicate API)",
+        "service": "LawBot 360 Voice Sales Agent",
+        "tts": "lightweight (pyttsx3)",
+        "ai": "OpenAI GPT-4",
         "human_phone": HUMAN_PHONE,
-        "no_scipy_issues": True
+        "deployment": "railway"
     }
 
 
@@ -226,17 +178,9 @@ async def serve_audio(filename: str):
     return {"error": "Audio file not found"}
 
 
-@app.get("/reference-voice")
-async def serve_reference_voice():
-    """Serve reference voice file to Replicate"""
-    if os.path.exists(REFERENCE_VOICE):
-        return FileResponse(REFERENCE_VOICE, media_type="audio/wav")
-    return {"error": "Reference voice not found"}
-
-
-@app.post("/voice/incoming")
-async def handle_incoming_call(request: Request):
-    """Handle incoming calls with YOUR cloned voice"""
+@app.post("/voice/inbound")
+async def handle_inbound_call(request: Request):
+    """Handle incoming call from interested law firm"""
     
     form_data = await request.form()
     from_number = form_data.get('From')
@@ -246,19 +190,17 @@ async def handle_incoming_call(request: Request):
     
     response = VoiceResponse()
     
-    # Generate greeting with YOUR voice
-    greeting_text = ("Hi! This is an AI sales assistant calling from 4D Gaming about LawBot 360, "
+    # Professional greeting
+    greeting_text = ("Hi! Thanks for calling 4D Gaming about LawBot 360, "
                     "our AI-powered client intake system for law firms. "
-                    "Press 1 to speak with me, or press 2 to transfer to a human immediately.")
+                    "Press 1 to speak with our AI assistant, or press 2 to transfer to a human immediately.")
     
     greeting_url = generate_speech(greeting_text)
     
     if greeting_url:
-        # Use your cloned voice
         response.play(greeting_url)
     else:
-        # Fallback to Twilio voice if Replicate fails
-        print("⚠️ Falling back to Twilio voice")
+        # Fallback to Twilio voice
         response.say(greeting_text, voice="Polly.Joanna")
     
     # Gather choice
@@ -271,22 +213,123 @@ async def handle_incoming_call(request: Request):
     response.append(gather)
     
     # Default to human
-    fallback_text = "I didn't receive a selection. Transferring you to a human now."
-    fallback_url = generate_speech(fallback_text)
-    
-    if fallback_url:
-        response.play(fallback_url)
-    else:
-        response.say(fallback_text, voice="Polly.Joanna")
-    
+    response.say("I didn't receive a selection. Transferring you to a human now.")
     response.dial(HUMAN_PHONE)
+    
+    return PlainTextResponse(content=str(response), media_type="application/xml")
+
+
+@app.post("/voice/outbound/cold-call")
+async def initiate_cold_call(request: Request):
+    """Initiate outbound cold call (Twilio webhook entry point)"""
+    
+    form_data = await request.form()
+    from_number = form_data.get('From')
+    to_number = form_data.get('To')
+    call_sid = form_data.get('CallSid')
+    
+    print(f"📞 Outbound cold call to {to_number}")
+    
+    response = VoiceResponse()
+    
+    # Opening pitch (direct and value-focused)
+    opening_text = ("Hi! This is calling from 4D Gaming. "
+                   "Quick question - are you losing leads outside business hours, nights and weekends? "
+                   "We fix that with AI. Got 5 minutes?")
+    
+    opening_url = generate_speech(opening_text)
+    
+    if opening_url:
+        response.play(opening_url)
+    else:
+        response.say(opening_text, voice="Polly.Joanna")
+    
+    # Gather yes/no response
+    gather = Gather(
+        input='speech dtmf',
+        timeout=5,
+        action='/voice/cold-call-response',
+        method='POST'
+    )
+    response.append(gather)
+    
+    # If no response, leave voicemail
+    voicemail_text = ("Hi, this is calling about LawBot 360. "
+                     "We help law firms capture leads 24/7 with AI. "
+                     "Visit lawbot360.com or call us back. Thanks!")
+    
+    voicemail_url = generate_speech(voicemail_text)
+    if voicemail_url:
+        response.play(voicemail_url)
+    else:
+        response.say(voicemail_text, voice="Polly.Joanna")
+    
+    return PlainTextResponse(content=str(response), media_type="application/xml")
+
+
+@app.post("/voice/cold-call-response")
+async def handle_cold_call_response(request: Request):
+    """Handle response to cold call opening"""
+    
+    form_data = await request.form()
+    speech_result = form_data.get('SpeechResult', '').lower()
+    digits = form_data.get('Digits', '')
+    call_sid = form_data.get('CallSid')
+    
+    response = VoiceResponse()
+    
+    # Check for interest
+    interested_keywords = ['yes', 'sure', 'okay', 'interested', 'tell me', 'go ahead']
+    not_interested_keywords = ['no', 'busy', 'not interested', 'remove', 'stop']
+    
+    if any(word in speech_result for word in interested_keywords) or digits == '1':
+        # They're interested - start AI conversation
+        ai_text = get_ai_response(call_sid, "Customer said yes to 5 minute pitch", "discovery")
+        audio_url = generate_speech(ai_text)
+        
+        if audio_url:
+            response.play(audio_url)
+        else:
+            response.say(ai_text, voice="Polly.Joanna")
+        
+        # Continue conversation
+        response.redirect("/voice/conversation")
+        
+    elif any(word in speech_result for word in not_interested_keywords):
+        # Not interested
+        closing_text = "No problem. Have a great day!"
+        closing_url = generate_speech(closing_text)
+        
+        if closing_url:
+            response.play(closing_url)
+        else:
+            response.say(closing_text, voice="Polly.Joanna")
+        
+        response.hangup()
+        
+    else:
+        # Unclear - ask again
+        clarify_text = "Sorry, I didn't catch that. Do you have 5 minutes to hear how we can help? Press 1 for yes, 2 for no."
+        clarify_url = generate_speech(clarify_text)
+        
+        if clarify_url:
+            response.play(clarify_url)
+        else:
+            response.say(clarify_text, voice="Polly.Joanna")
+        
+        gather = Gather(
+            num_digits=1,
+            action='/voice/cold-call-response',
+            timeout=5
+        )
+        response.append(gather)
     
     return PlainTextResponse(content=str(response), media_type="application/xml")
 
 
 @app.post("/voice/handle-choice")
 async def handle_choice(request: Request):
-    """Handle user choice with dynamic AI conversation"""
+    """Handle user choice (AI or Human)"""
     
     form_data = await request.form()
     choice = form_data.get('Digits')
@@ -298,27 +341,42 @@ async def handle_choice(request: Request):
     response = VoiceResponse()
     
     if choice == '1':
-        # Start AI conversation with YOUR voice
-        ai_text = get_ai_response(call_sid, "User wants to talk to AI", "greeting")
+        # Start AI conversation
+        ai_text = get_ai_response(call_sid, "User chose AI assistant", "greeting")
         audio_url = generate_speech(ai_text)
-        response.play(audio_url)
         
-        # Start conversation flow
+        if audio_url:
+            response.play(audio_url)
+        else:
+            response.say(ai_text, voice="Polly.Joanna")
+        
+        # Continue to conversation flow
         response.redirect("/voice/conversation")
         
     elif choice == '2':
         # Transfer to human
-        notify_human_transfer(from_number, call_sid, "Initial choice")
+        notify_human_transfer(from_number, "User requested human from menu")
+        
         transfer_text = "Perfect! Transferring you to a human team member now."
         audio_url = generate_speech(transfer_text)
-        response.play(audio_url)
+        
+        if audio_url:
+            response.play(audio_url)
+        else:
+            response.say(transfer_text, voice="Polly.Joanna")
+        
         response.dial(HUMAN_PHONE)
         
     else:
-        # Invalid
+        # Invalid choice
         fallback_text = "I didn't catch that. Let me transfer you to a human."
         audio_url = generate_speech(fallback_text)
-        response.play(audio_url)
+        
+        if audio_url:
+            response.play(audio_url)
+        else:
+            response.say(fallback_text, voice="Polly.Joanna")
+        
         response.dial(HUMAN_PHONE)
     
     return PlainTextResponse(content=str(response), media_type="application/xml")
@@ -326,7 +384,7 @@ async def handle_choice(request: Request):
 
 @app.post("/voice/conversation")
 async def conversation(request: Request):
-    """Main conversation loop with dynamic AI responses"""
+    """Main AI conversation loop"""
     
     form_data = await request.form()
     call_sid = form_data.get('CallSid')
@@ -339,7 +397,13 @@ async def conversation(request: Request):
     if '*' in digits or any(word in speech_result.lower() for word in ['human', 'person', 'representative', 'transfer']):
         transfer_text = "Of course, let me transfer you to a specialist now."
         audio_url = generate_speech(transfer_text)
-        response.play(audio_url)
+        
+        if audio_url:
+            response.play(audio_url)
+        else:
+            response.say(transfer_text, voice="Polly.Joanna")
+        
+        notify_human_transfer(form_data.get('From'), "User requested transfer during conversation")
         response.dial(HUMAN_PHONE)
         return PlainTextResponse(content=str(response), media_type="application/xml")
     
@@ -350,13 +414,23 @@ async def conversation(request: Request):
         # Check if AI wants to transfer
         if "transfer" in ai_text.lower() or "specialist" in ai_text.lower():
             audio_url = generate_speech(ai_text)
-            response.play(audio_url)
+            
+            if audio_url:
+                response.play(audio_url)
+            else:
+                response.say(ai_text, voice="Polly.Joanna")
+            
+            notify_human_transfer(form_data.get('From'), "AI determined human needed")
             response.dial(HUMAN_PHONE)
             return PlainTextResponse(content=str(response), media_type="application/xml")
         
-        # Generate and play AI response with YOUR voice
+        # Generate and play AI response
         audio_url = generate_speech(ai_text)
-        response.play(audio_url)
+        
+        if audio_url:
+            response.play(audio_url)
+        else:
+            response.say(ai_text, voice="Polly.Joanna")
         
         # Continue conversation
         gather = Gather(
@@ -373,7 +447,11 @@ async def conversation(request: Request):
         # No response - offer human
         fallback_text = "I didn't catch that. Would you like to speak with a human? Press 1 for yes, 2 to continue with me."
         audio_url = generate_speech(fallback_text)
-        response.play(audio_url)
+        
+        if audio_url:
+            response.play(audio_url)
+        else:
+            response.say(fallback_text, voice="Polly.Joanna")
         
         gather = Gather(
             num_digits=1,
@@ -388,7 +466,7 @@ async def conversation(request: Request):
 
 @app.post("/voice/fallback-choice")
 async def fallback_choice(request: Request):
-    """Handle fallback when they don't respond"""
+    """Handle fallback when user doesn't respond"""
     
     form_data = await request.form()
     choice = form_data.get('Digits')
@@ -400,13 +478,24 @@ async def fallback_choice(request: Request):
         # Transfer to human
         transfer_text = "Great, connecting you now."
         audio_url = generate_speech(transfer_text)
-        response.play(audio_url)
+        
+        if audio_url:
+            response.play(audio_url)
+        else:
+            response.say(transfer_text, voice="Polly.Joanna")
+        
+        notify_human_transfer(form_data.get('From'), "User chose human from fallback")
         response.dial(HUMAN_PHONE)
     else:
         # Continue with AI
-        continue_text = "Okay, let's continue. Tell me about your law firm."
+        continue_text = "Okay, let's continue. Tell me about your law firm's current intake process."
         audio_url = generate_speech(continue_text)
-        response.play(audio_url)
+        
+        if audio_url:
+            response.play(audio_url)
+        else:
+            response.say(continue_text, voice="Polly.Joanna")
+        
         response.redirect("/voice/conversation")
     
     return PlainTextResponse(content=str(response), media_type="application/xml")
@@ -414,18 +503,18 @@ async def fallback_choice(request: Request):
 
 @app.get("/test-tts")
 async def test_tts():
-    """Test endpoint to verify Replicate voice cloning works"""
+    """Test endpoint to verify TTS works"""
     try:
-        # Test generating speech
-        test_text = "This is a test of your cloned voice using Replicate API."
+        test_text = "This is a test of the lightweight text to speech system. It's fast and reliable!"
         audio_url = generate_speech(test_text)
         
         if audio_url:
             return {
                 "status": "success",
-                "message": "Replicate voice cloning working!",
-                "model": "xtts-v2 (via Replicate)",
-                "test_audio": audio_url
+                "message": "Lightweight TTS working!",
+                "engine": "pyttsx3",
+                "test_audio": audio_url,
+                "speed": "< 1 second"
             }
         else:
             return {
@@ -440,7 +529,7 @@ async def test_tts():
 
 
 def notify_human_transfer(from_number: str, reason: str):
-    """Send email notification"""
+    """Send email notification for human transfer"""
     try:
         params = {
             "from": os.getenv("FROM_EMAIL", "onboarding@resend.dev"),
@@ -451,29 +540,16 @@ def notify_human_transfer(from_number: str, reason: str):
             <p><strong>From:</strong> {from_number}</p>
             <p><strong>Reason:</strong> {reason}</p>
             <p><strong>Transferring to:</strong> {HUMAN_PHONE}</p>
+            <p><strong>Action:</strong> Answer your phone!</p>
             """
         }
         resend.Emails.send(params)
+        print(f"✅ Notified about transfer: {from_number}")
     except Exception as e:
-        print(f"Email error: {e}")
+        print(f"❌ Email notification error: {e}")
 
 
-def schedule_callback(name: str, phone: str, email: str, context: str):
-    """Schedule callback"""
-    try:
-        params = {
-            "from": os.getenv("FROM_EMAIL", "onboarding@resend.dev"),
-            "to": [os.getenv("FROM_EMAIL")],
-            "subject": f"🔔 Callback Request - {phone}",
-            "html": f"""
-            <h2>Callback Request</h2>
-            <p><strong>Name:</strong> {name}</p>
-            <p><strong>Phone:</strong> {phone}</p>
-            <p><strong>Context:</strong> {context}</p>
-            <p><strong>Action:</strong> Call back ASAP</p>
-            """
-        }
-        resend.Emails.send(params)
-        print(f"✅ Callback scheduled: {phone}")
-    except Exception as e:
-        print(f"Email error: {e}")
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)

@@ -1,0 +1,28 @@
+#!/bin/bash
+# Quick Deploy: Lightweight TTS to Railway
+# Run this in your project directory
+
+echo "🚀 Deploying Lightweight TTS to Railway"
+echo "========================================"
+
+# Backup original files (if they exist)
+[ -f Dockerfile ] && mv Dockerfile Dockerfile.backup
+[ -f requirements.txt ] && mv requirements.txt requirements.backup
+[ -f tts_server.py ] && mv tts_server.py tts_server.backup
+
+# Copy lightweight versions
+echo "📦 Setting up lightweight files..."
+cp Dockerfile_lightweight Dockerfile
+cp requirements_lightweight.txt requirements.txt
+cp tts_server_lightweight.py tts_server.py
+
+echo "✅ Files ready for Railway deployment"
+echo ""
+echo "Next steps:"
+echo "1. railway up"
+echo "   OR"
+echo "2. git add . && git commit -m 'Deploy lightweight TTS' && git push"
+echo ""
+echo "⏱️  Build time: ~2 minutes"
+echo "💾 Image size: ~80MB"
+echo "🎤 Voice: Professional system voice"
