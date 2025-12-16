@@ -59,33 +59,32 @@ Current stage: {stage}
 Client name: {conv.get('client_name', 'Unknown')}
 Firm: {conv.get('firm_name', 'Unknown')}
 
-YOUR GOAL: Sell LawBot 360 ($25,000 base price, $7,500 down payment)
+YOUR GOAL: Have a natural sales conversation about LawBot 360 ($25,000 base price, $7,500 down payment)
 
 CRITICAL RULES:
-1. Keep responses VERY SHORT (1-2 sentences max) - this is a phone call
-2. Sound natural and conversational - like a real sales person
-3. Listen to what they say and respond personally
-4. Move the conversation toward discovery → pain points → solution → close
-5. If they want human, acknowledge and we'll transfer
-6. Be confident but consultative, not pushy
-7. Use their name when you know it
+1. Keep responses EXTREMELY SHORT (1-2 sentences max) - this is a phone call
+2. Sound natural and conversational - like calling a friend
+3. Ask ONE question at a time and wait for their answer
+4. Don't mention transferring to humans - you ARE the conversation
+5. Use their name when you know it
+6. Be warm, confident, and consultative (not pushy)
 
 PRODUCT: LawBot 360
 - 24/7 AI-powered client intake chatbot
 - Automatic lead qualification and consultation scheduling
 - Integrates with Clio, Salesforce, MyCase
 - Customizable for any practice area
-- Base price: $25,000 one-time, $7,500 down payment to start
+- Base price: $25,000 one-time, $7,500 down to start
 
 CONVERSATION FLOW:
-1. Opening: "Hi! Quick question - are you losing leads outside business hours?"
-2. Discovery: Ask about their current intake process
-3. Pain points: Identify what's not working
-4. Solution: Show how LawBot 360 solves their specific problems
-5. Pricing: Discuss investment when they're interested
-6. Close: Get commitment or schedule demo
+1. Opening: "Great! I'm here to help. Quick question - are you currently losing leads when your office is closed?"
+2. Discovery: Ask about their current intake process (ONE question at a time)
+3. Pain points: Listen and identify what's not working
+4. Solution: Show how LawBot 360 solves THEIR specific problems
+5. Pricing: Discuss investment only when they're interested
+6. Close: Get commitment or schedule a demo
 
-Your goal: Have a natural conversation that leads to a sale or human handoff.
+Remember: SHORT responses, ONE question at a time, natural and friendly!
 """
     
     # Get AI response
@@ -98,7 +97,7 @@ Your goal: Have a natural conversation that leads to a sale or human handoff.
             model="gpt-4-turbo-preview",
             messages=messages,
             temperature=0.7,
-            max_tokens=100  # Keep it short!
+            max_tokens=80  # Even shorter - force brevity!
         )
         
         ai_response = response.choices[0].message.content
@@ -138,10 +137,10 @@ async def handle_inbound_call(request: Request):
     
     response = VoiceResponse()
     
-    # Professional greeting with Twilio voice
-    greeting_text = ("Hi! Thanks for calling 4D Gaming about LawBot 360, "
-                    "our AI-powered client intake system for law firms. "
-                    "Press 1 to speak with our AI assistant, or press 2 to transfer to a human immediately.")
+    # Professional greeting with clear options
+    greeting_text = ("Hi! Thanks for calling 4D Gaming about LawBot 360. "
+                    "Press 1 to speak with me about our AI client intake system, "
+                    "or press 2 to speak with a human team member right away.")
     
     response.say(greeting_text, voice=VOICE)
     
@@ -154,8 +153,8 @@ async def handle_inbound_call(request: Request):
     )
     response.append(gather)
     
-    # Default to human
-    response.say("I didn't receive a selection. Transferring you to a human now.", voice=VOICE)
+    # Default to human if no response
+    response.say("I didn't receive a selection. Transferring you now.", voice=VOICE)
     response.dial(HUMAN_PHONE)
     
     return PlainTextResponse(content=str(response), media_type="application/xml")
@@ -255,22 +254,45 @@ async def handle_choice(request: Request):
     response = VoiceResponse()
     
     if choice == '1':
-        # Start AI conversation
-        ai_text = get_ai_response(call_sid, "User chose AI assistant", "greeting")
+        # Start AI conversation naturally
+        ai_text = get_ai_response(call_sid, "User chose AI assistant to learn about LawBot 360", "greeting")
         response.say(ai_text, voice=VOICE)
         
-        # Continue to conversation flow
-        response.redirect("/voice/conversation")
+        # Listen for their response
+        gather = Gather(
+            input='speech',
+            action='/voice/conversation',
+            method='POST',
+            speech_timeout='auto',
+            timeout=10
+        )
+        response.append(gather)
+        
+        # If no response, prompt
+        response.say("I'm here to help. What would you like to know?", voice=VOICE)
+        
+        # Try again
+        gather2 = Gather(
+            input='speech',
+            action='/voice/conversation',
+            method='POST',
+            timeout=10
+        )
+        response.append(gather2)
+        
+        # Still no response - transfer
+        response.say("Let me connect you with someone who can help.", voice=VOICE)
+        response.dial(HUMAN_PHONE)
         
     elif choice == '2':
         # Transfer to human
         notify_human_transfer(from_number, "User requested human from menu")
-        response.say("Perfect! Transferring you to a human team member now.", voice=VOICE)
+        response.say("Connecting you now.", voice=VOICE)
         response.dial(HUMAN_PHONE)
         
     else:
-        # Invalid choice
-        response.say("I didn't catch that. Let me transfer you to a human.", voice=VOICE)
+        # Invalid choice - transfer to human
+        response.say("Let me transfer you to a team member.", voice=VOICE)
         response.dial(HUMAN_PHONE)
     
     return PlainTextResponse(content=str(response), media_type="application/xml")
@@ -287,7 +309,7 @@ async def conversation(request: Request):
     
     response = VoiceResponse()
     
-    # Check for human transfer request
+    # Check for human transfer request (user says "human" or presses *)
     if '*' in digits or any(word in speech_result.lower() for word in ['human', 'person', 'representative', 'transfer']):
         response.say("Of course, let me transfer you to a specialist now.", voice=VOICE)
         notify_human_transfer(form_data.get('From'), "User requested transfer during conversation")
@@ -296,7 +318,9 @@ async def conversation(request: Request):
     
     # Get AI response based on what they said
     if speech_result:
+        print(f"📞 User said: {speech_result}")
         ai_text = get_ai_response(call_sid, speech_result, "conversation")
+        print(f"🤖 AI responding: {ai_text}")
         
         # Check if AI wants to transfer
         if "transfer" in ai_text.lower() or "specialist" in ai_text.lower():
@@ -305,31 +329,42 @@ async def conversation(request: Request):
             response.dial(HUMAN_PHONE)
             return PlainTextResponse(content=str(response), media_type="application/xml")
         
-        # Generate and play AI response
+        # Say AI response
         response.say(ai_text, voice=VOICE)
         
-        # Continue conversation
+        # Continue conversation - wait for their response
         gather = Gather(
-            input='speech dtmf',
+            input='speech',  # Only speech (no DTMF needed during conversation)
             action='/voice/conversation',
             method='POST',
-            speech_timeout='auto',
-            timeout=5,
+            speech_timeout='auto',  # Auto-detect when they stop talking
+            timeout=10,  # Wait up to 10 seconds for them to start talking
             finish_on_key='#'
         )
         response.append(gather)
         
-    else:
-        # No response - offer human
-        response.say("I didn't catch that. Would you like to speak with a human? Press 1 for yes, 2 to continue with me.", voice=VOICE)
+        # If they don't respond after timeout, prompt again
+        response.say("Are you still there?", voice=VOICE)
         
-        gather = Gather(
-            num_digits=1,
-            action='/voice/fallback-choice',
+        # Give them another chance
+        gather2 = Gather(
+            input='speech',
+            action='/voice/conversation',
             method='POST',
-            timeout=5
+            timeout=10
         )
-        response.append(gather)
+        response.append(gather2)
+        
+        # If still no response, offer human
+        response.say("I'm having trouble hearing you. Let me transfer you to someone who can help.", voice=VOICE)
+        response.dial(HUMAN_PHONE)
+        
+    else:
+        # No speech detected at all
+        print("⚠️ No speech result received")
+        response.say("I'm sorry, I didn't hear anything. Let me connect you with a human specialist.", voice=VOICE)
+        notify_human_transfer(form_data.get('From'), "No speech detected")
+        response.dial(HUMAN_PHONE)
     
     return PlainTextResponse(content=str(response), media_type="application/xml")
 
@@ -380,7 +415,7 @@ def notify_human_transfer(from_number: str, reason: str):
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8080))
+    port = int(os.getenv("PORT", 8000))
     print("=" * 70)
     print("🤖 LawBot 360 Voice Sales Agent")
     print("=" * 70)
