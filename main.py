@@ -25,6 +25,19 @@ twilio_client = Client(
 
 # Configuration
 HUMAN_PHONE = os.getenv("PHONE")
+
+# Validate phone number format on startup
+if HUMAN_PHONE:
+    # Clean phone number - ensure it's in E.164 format
+    if not HUMAN_PHONE.startswith('+'):
+        print(f"⚠️  WARNING: PHONE number should start with + (E.164 format)")
+        print(f"   Current: {HUMAN_PHONE}")
+        print(f"   Should be: +15043833692")
+    else:
+        print(f"✅ Human transfer number configured: {HUMAN_PHONE}")
+else:
+    print("❌ WARNING: PHONE environment variable not set! Transfers will fail.")
+    print("   Set in Railway: PHONE=+15043833692")
 SERVER_URL = os.getenv("SERVER_URL", "https://voicefusion-ai-production.up.railway.app")
 
 # Conversation memory
@@ -33,6 +46,29 @@ conversations = {}
 # Twilio voice configuration (Amazon Polly voices)
 # Options: Polly.Joanna (female), Polly.Matthew (male), Polly.Salli (female)
 VOICE = "Polly.Joanna"  # Professional female voice
+
+
+def transfer_to_human(response: VoiceResponse, reason: str = "Transfer requested"):
+    """Helper function to transfer call with proper error handling"""
+    if not HUMAN_PHONE:
+        print(f"❌ Cannot transfer: PHONE not configured")
+        response.say("I apologize, but I'm unable to transfer you right now. Please call us directly at 504-383-3692.", voice=VOICE)
+        return response
+    
+    print(f"🔄 Transferring to {HUMAN_PHONE}. Reason: {reason}")
+    
+    try:
+        response.dial(
+            number=HUMAN_PHONE,
+            timeout=30,
+            action='/voice/dial-status',
+            method='POST'
+        )
+    except Exception as e:
+        print(f"❌ Dial error: {e}")
+        response.say("I'm having trouble connecting. Please call us directly at 504-383-3692.", voice=VOICE)
+    
+    return response
 
 
 def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
@@ -297,7 +333,7 @@ async def handle_inbound_call(request: Request):
     
     # Default to human if no response
     response.say("I didn't receive a selection. Transferring you now.", voice=VOICE)
-    response.dial(HUMAN_PHONE)
+    transfer_to_human(response, "No selection received")
     
     return PlainTextResponse(content=str(response), media_type="application/xml")
 
@@ -425,19 +461,19 @@ async def handle_choice(request: Request):
         # Still no response - transfer
         response.say("Let me connect you with someone who can help.", voice=VOICE)
         notify_human_transfer(from_number, call_sid, "No response after initial greeting")
-        response.dial(HUMAN_PHONE)
+        transfer_to_human(response, "Transfer needed")
         
     elif choice == '2':
         # Transfer to human
         notify_human_transfer(from_number, call_sid, "User requested human from menu")
         response.say("Connecting you now.", voice=VOICE)
-        response.dial(HUMAN_PHONE)
+        transfer_to_human(response, "Transfer needed")
         
     else:
         # Invalid choice - transfer to human
         response.say("Let me transfer you to a team member.", voice=VOICE)
         notify_human_transfer(from_number, call_sid, "Invalid menu choice")
-        response.dial(HUMAN_PHONE)
+        transfer_to_human(response, "Transfer needed")
     
     return PlainTextResponse(content=str(response), media_type="application/xml")
 
@@ -458,7 +494,7 @@ async def conversation(request: Request):
     if '*' in digits or any(word in speech_result.lower() for word in ['human', 'person', 'representative', 'transfer']):
         response.say("Of course, let me transfer you to a specialist now.", voice=VOICE)
         notify_human_transfer(from_number, call_sid, "User requested transfer during conversation")
-        response.dial(HUMAN_PHONE)
+        transfer_to_human(response, "User requested")
         return PlainTextResponse(content=str(response), media_type="application/xml")
     
     # Get AI response based on what they said
@@ -506,53 +542,88 @@ async def conversation(request: Request):
         if "transfer" in ai_text.lower() or "specialist" in ai_text.lower():
             response.say(ai_text, voice=VOICE)
             notify_human_transfer(from_number, call_sid, "AI determined human needed")
-            response.dial(HUMAN_PHONE)
+            transfer_to_human(response, "Transfer needed")
             return PlainTextResponse(content=str(response), media_type="application/xml")
         
         # Say AI response
         response.say(ai_text, voice=VOICE)
         
-        # Check if onboarding is complete (payment done and questions asked)
-        if call_sid in conversations:
-            conv = conversations[call_sid]
-            if conv.get("payment_completed") and "any questions" in ai_text.lower():
-                # This might be the end of the call - prepare for potential goodbye
-                print("✅ Onboarding complete - waiting for final questions or goodbye")
-        
         # Continue conversation - wait for their response
         gather = Gather(
-            input='speech',  # Only speech (no DTMF needed during conversation)
+            input='speech',
             action='/voice/conversation',
             method='POST',
-            speech_timeout='auto',  # Auto-detect when they stop talking
-            timeout=10,  # Wait up to 10 seconds for them to start talking
+            speech_timeout='auto',
+            timeout=15,  # Give them more time (was 10)
             finish_on_key='#'
         )
         response.append(gather)
         
-        # If they don't respond after timeout, prompt again
+        # If no response, just say "Are you still there?" and try ONE more time
+        # Don't immediately transfer - give them more chances
         response.say("Are you still there?", voice=VOICE)
         
-        # Give them another chance
         gather2 = Gather(
             input='speech',
             action='/voice/conversation',
             method='POST',
-            timeout=10
+            timeout=15
         )
         response.append(gather2)
         
-        # If still no response, offer human
+        # If STILL no response, say you'll wait and try again
+        response.say("I'm still here. Let me know when you're ready.", voice=VOICE)
+        
+        gather3 = Gather(
+            input='speech',
+            action='/voice/conversation',
+            method='POST',
+            timeout=15
+        )
+        response.append(gather3)
+        
+        # Only after 3 failed attempts, transfer
         response.say("I'm having trouble hearing you. Let me transfer you to someone who can help.", voice=VOICE)
         notify_human_transfer(from_number, call_sid, "No response after multiple attempts")
-        response.dial(HUMAN_PHONE)
+        transfer_to_human(response, "Transfer needed")
         
     else:
         # No speech detected at all
         print("⚠️ No speech result received")
         response.say("I'm sorry, I didn't hear anything. Let me connect you with a human specialist.", voice=VOICE)
         notify_human_transfer(from_number, call_sid, "No speech detected")
-        response.dial(HUMAN_PHONE)
+        transfer_to_human(response, "Transfer needed")
+    
+    return PlainTextResponse(content=str(response), media_type="application/xml")
+
+
+@app.post("/voice/dial-status")
+async def dial_status(request: Request):
+    """Track dial status for debugging"""
+    form_data = await request.form()
+    dial_call_status = form_data.get('DialCallStatus')
+    dial_call_duration = form_data.get('DialCallDuration')
+    
+    print(f"📞 Dial Status: {dial_call_status}, Duration: {dial_call_duration}s")
+    
+    response = VoiceResponse()
+    
+    if dial_call_status in ['completed', 'answered']:
+        # Call was answered and completed
+        print("✅ Transfer successful!")
+        response.say("Thank you for using our service. Goodbye!", voice=VOICE)
+    elif dial_call_status == 'busy':
+        print("❌ Transfer failed: Line busy")
+        response.say("I'm sorry, the line is busy. Please try again later or call us directly at 504-383-3692.", voice=VOICE)
+    elif dial_call_status == 'no-answer':
+        print("❌ Transfer failed: No answer")
+        response.say("I'm sorry, no one answered. Please call us directly at 504-383-3692 or try again later.", voice=VOICE)
+    elif dial_call_status == 'failed':
+        print("❌ Transfer failed: Call failed")
+        response.say("I'm sorry, the transfer failed. Please call us directly at 504-383-3692.", voice=VOICE)
+    else:
+        print(f"⚠️  Unknown dial status: {dial_call_status}")
+        response.say("Thank you for calling.", voice=VOICE)
     
     return PlainTextResponse(content=str(response), media_type="application/xml")
 
@@ -572,7 +643,7 @@ async def fallback_choice(request: Request):
         # Transfer to human
         response.say("Great, connecting you now.", voice=VOICE)
         notify_human_transfer(from_number, call_sid, "User chose human from fallback")
-        response.dial(HUMAN_PHONE)
+        transfer_to_human(response, "Transfer needed")
     else:
         # Continue with AI
         response.say("Okay, let's continue. Tell me about your law firm's current intake process.", voice=VOICE)
@@ -589,7 +660,7 @@ async def fallback_choice(request: Request):
         # If still no response, transfer
         response.say("Let me connect you with someone.", voice=VOICE)
         notify_human_transfer(from_number, call_sid, "Multiple failed attempts")
-        response.dial(HUMAN_PHONE)
+        transfer_to_human(response, "Transfer needed")
     
     return PlainTextResponse(content=str(response), media_type="application/xml")
 
