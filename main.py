@@ -282,17 +282,19 @@ async def handle_choice(request: Request):
         
         # Still no response - transfer
         response.say("Let me connect you with someone who can help.", voice=VOICE)
+        notify_human_transfer(from_number, call_sid, "No response after initial greeting")
         response.dial(HUMAN_PHONE)
         
     elif choice == '2':
         # Transfer to human
-        notify_human_transfer(from_number, "User requested human from menu")
+        notify_human_transfer(from_number, call_sid, "User requested human from menu")
         response.say("Connecting you now.", voice=VOICE)
         response.dial(HUMAN_PHONE)
         
     else:
         # Invalid choice - transfer to human
         response.say("Let me transfer you to a team member.", voice=VOICE)
+        notify_human_transfer(from_number, call_sid, "Invalid menu choice")
         response.dial(HUMAN_PHONE)
     
     return PlainTextResponse(content=str(response), media_type="application/xml")
@@ -306,13 +308,14 @@ async def conversation(request: Request):
     call_sid = form_data.get('CallSid')
     speech_result = form_data.get('SpeechResult', '')
     digits = form_data.get('Digits', '')
+    from_number = form_data.get('From')
     
     response = VoiceResponse()
     
     # Check for human transfer request (user says "human" or presses *)
     if '*' in digits or any(word in speech_result.lower() for word in ['human', 'person', 'representative', 'transfer']):
         response.say("Of course, let me transfer you to a specialist now.", voice=VOICE)
-        notify_human_transfer(form_data.get('From'), "User requested transfer during conversation")
+        notify_human_transfer(from_number, call_sid, "User requested transfer during conversation")
         response.dial(HUMAN_PHONE)
         return PlainTextResponse(content=str(response), media_type="application/xml")
     
@@ -325,7 +328,7 @@ async def conversation(request: Request):
         # Check if AI wants to transfer
         if "transfer" in ai_text.lower() or "specialist" in ai_text.lower():
             response.say(ai_text, voice=VOICE)
-            notify_human_transfer(form_data.get('From'), "AI determined human needed")
+            notify_human_transfer(from_number, call_sid, "AI determined human needed")
             response.dial(HUMAN_PHONE)
             return PlainTextResponse(content=str(response), media_type="application/xml")
         
@@ -357,13 +360,14 @@ async def conversation(request: Request):
         
         # If still no response, offer human
         response.say("I'm having trouble hearing you. Let me transfer you to someone who can help.", voice=VOICE)
+        notify_human_transfer(from_number, call_sid, "No response after multiple attempts")
         response.dial(HUMAN_PHONE)
         
     else:
         # No speech detected at all
         print("⚠️ No speech result received")
         response.say("I'm sorry, I didn't hear anything. Let me connect you with a human specialist.", voice=VOICE)
-        notify_human_transfer(form_data.get('From'), "No speech detected")
+        notify_human_transfer(from_number, call_sid, "No speech detected")
         response.dial(HUMAN_PHONE)
     
     return PlainTextResponse(content=str(response), media_type="application/xml")
@@ -376,46 +380,118 @@ async def fallback_choice(request: Request):
     form_data = await request.form()
     choice = form_data.get('Digits')
     call_sid = form_data.get('CallSid')
+    from_number = form_data.get('From')
     
     response = VoiceResponse()
     
     if choice == '1':
         # Transfer to human
         response.say("Great, connecting you now.", voice=VOICE)
-        notify_human_transfer(form_data.get('From'), "User chose human from fallback")
+        notify_human_transfer(from_number, call_sid, "User chose human from fallback")
         response.dial(HUMAN_PHONE)
     else:
         # Continue with AI
         response.say("Okay, let's continue. Tell me about your law firm's current intake process.", voice=VOICE)
-        response.redirect("/voice/conversation")
+        
+        # Listen for response
+        gather = Gather(
+            input='speech',
+            action='/voice/conversation',
+            method='POST',
+            timeout=10
+        )
+        response.append(gather)
+        
+        # If still no response, transfer
+        response.say("Let me connect you with someone.", voice=VOICE)
+        notify_human_transfer(from_number, call_sid, "Multiple failed attempts")
+        response.dial(HUMAN_PHONE)
     
     return PlainTextResponse(content=str(response), media_type="application/xml")
 
 
-def notify_human_transfer(from_number: str, reason: str):
-    """Send email notification for human transfer"""
+def notify_human_transfer(from_number: str, call_sid: str, reason: str):
+    """Send email notification with conversation transcript"""
     try:
+        # Get conversation history if available
+        conversation_html = "<p><em>No conversation history available</em></p>"
+        
+        if call_sid in conversations:
+            conv = conversations[call_sid]
+            if conv["history"]:
+                conversation_html = "<h3>Conversation Transcript:</h3><div style='background: #f5f5f5; padding: 15px; border-radius: 5px;'>"
+                
+                for msg in conv["history"]:
+                    role = msg.get("role", "unknown")
+                    content = msg.get("content", "")
+                    
+                    if role == "user":
+                        conversation_html += f"<p><strong>Prospect:</strong> {content}</p>"
+                    elif role == "assistant":
+                        conversation_html += f"<p><strong>AI Bot:</strong> {content}</p>"
+                
+                conversation_html += "</div>"
+                
+                # Add context info
+                if conv.get("client_name"):
+                    conversation_html += f"<p><strong>Client Name:</strong> {conv['client_name']}</p>"
+                if conv.get("firm_name"):
+                    conversation_html += f"<p><strong>Firm Name:</strong> {conv['firm_name']}</p>"
+                if conv.get("pain_points"):
+                    conversation_html += f"<p><strong>Pain Points Mentioned:</strong> {', '.join(conv['pain_points'])}</p>"
+        
         params = {
             "from": os.getenv("FROM_EMAIL", "onboarding@resend.dev"),
             "to": [os.getenv("FROM_EMAIL")],
             "subject": f"🔔 Live Call Transfer - {from_number}",
             "html": f"""
-            <h2>Live Call Transfer</h2>
-            <p><strong>From:</strong> {from_number}</p>
-            <p><strong>Reason:</strong> {reason}</p>
-            <p><strong>Transferring to:</strong> {HUMAN_PHONE}</p>
-            <p><strong>Action:</strong> Answer your phone!</p>
+            <div style="font-family: Arial, sans-serif; max-width: 600px;">
+                <h2 style="color: #667eea;">🔔 Live Call Transfer</h2>
+                
+                <div style="background: #fff3cd; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                    <p style="margin: 0; font-weight: bold; color: #856404;">
+                        ⚡ INCOMING CALL - Answer your phone now!
+                    </p>
+                </div>
+                
+                <h3>Call Details:</h3>
+                <ul>
+                    <li><strong>From:</strong> {from_number}</li>
+                    <li><strong>Reason:</strong> {reason}</li>
+                    <li><strong>Call SID:</strong> {call_sid}</li>
+                    <li><strong>Your Number:</strong> {HUMAN_PHONE}</li>
+                </ul>
+                
+                {conversation_html}
+                
+                <div style="background: #e7f3ff; padding: 15px; border-radius: 5px; margin-top: 20px;">
+                    <p><strong>📞 Next Steps:</strong></p>
+                    <ol>
+                        <li>Answer the incoming call on {HUMAN_PHONE}</li>
+                        <li>Review the conversation above to see where the bot left off</li>
+                        <li>Continue the conversation naturally</li>
+                        <li>Close the deal! 💰</li>
+                    </ol>
+                </div>
+                
+                <p style="color: #666; font-size: 12px; margin-top: 30px;">
+                    This is an automated notification from LawBot 360 Sales Bot
+                </p>
+            </div>
             """
         }
         resend.Emails.send(params)
         print(f"✅ Notified about transfer: {from_number}")
+        print(f"📧 Email sent with conversation transcript")
     except Exception as e:
         print(f"❌ Email notification error: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8000))
+    port = int(os.getenv("PORT", 8080))
     print("=" * 70)
     print("🤖 LawBot 360 Voice Sales Agent")
     print("=" * 70)
