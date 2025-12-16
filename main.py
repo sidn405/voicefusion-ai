@@ -171,7 +171,7 @@ Would you like any of these add-ons? If you're not sure, you can skip them."
 STEP 8: "Perfect! Now choose a Monthly Maintenance Plan:
 - Basic: Hosting, security updates, bug fixes, email support
 - Professional: Everything in Basic plus priority support and monthly feature updates  
-- Premium: Everything plus 24/7 support and custom feature development
+- Enterprise: Everything plus 24/7 support and custom feature development
 Or you can select 'No Maintenance Plan' if you prefer to handle it yourself.
 Which makes sense for your firm?"
 
@@ -597,17 +597,25 @@ async def fallback_choice(request: Request):
 def send_integration_form_email(client_email: str, client_name: str, firm_name: str):
     """Send integration form link to client after payment"""
     try:
+        # Prefer ADMIN_EMAIL (custom domain) over FROM_EMAIL (might be Gmail)
+        admin_email = os.getenv("ADMIN_EMAIL")
         from_email = os.getenv("FROM_EMAIL", "onboarding@resend.dev")
         
-        # Check if using Gmail
-        if "@gmail.com" in from_email.lower():
-            print("⚠️  WARNING: Using Gmail address. Email not sent.")
+        # Use custom domain email if available
+        sender_email = admin_email if admin_email else from_email
+        
+        # Check if using Gmail (won't work with Resend)
+        if "@gmail.com" in sender_email.lower():
+            print("⚠️  WARNING: Gmail detected. Use ADMIN_EMAIL with custom domain instead.")
+            print(f"   Set in Railway: ADMIN_EMAIL=noreply@4dgaming.games")
             print(f"   Manual action: Send this link to {client_email}:")
             print(f"   https://4dgaming.games/client-integration.html")
             return
         
+        print(f"📧 Sending integration form from: {sender_email}")
+        
         params = {
-            "from": from_email,
+            "from": sender_email,
             "to": [client_email],
             "subject": f"Welcome to 4D Gaming - Integration Form for {firm_name}",
             "html": f"""
@@ -636,7 +644,7 @@ def send_integration_form_email(client_email: str, client_name: str, firm_name: 
                     <li>Complete the integration form (takes ~10 minutes)</li>
                     <li>Our team reviews your information within 24 hours</li>
                     <li>You'll receive your project timeline and start date</li>
-                    <li>Design and development begins (2-3 weeks)</li>
+                    <li>Design and development begins (2 weeks)</li>
                     <li>You get your custom LawBot 360!</li>
                 </ol>
                 
@@ -730,18 +738,33 @@ def notify_human_transfer(from_number: str, call_sid: str, reason: str):
     
     # Try to send email (but don't crash if it fails)
     try:
-        from_email = os.getenv("FROM_EMAIL", "onboarding@resend.dev")
+        # Prefer ADMIN_EMAIL (custom domain) for sending
+        admin_email = os.getenv("ADMIN_EMAIL")
+        from_email = os.getenv("FROM_EMAIL")
         
-        # Check if using Gmail (which requires verification)
-        if "@gmail.com" in from_email.lower():
-            print("⚠️  WARNING: Using Gmail address. Resend requires verified domains.")
-            print("   To fix: Use a custom domain email or verify Gmail in Resend.")
+        # Use custom domain for sending
+        sender_email = admin_email if admin_email else from_email
+        
+        # Send notification to FROM_EMAIL (your personal email)
+        recipient_email = from_email if from_email else "onboarding@resend.dev"
+        
+        if not sender_email:
+            print("⚠️  No ADMIN_EMAIL or FROM_EMAIL set. Email not sent.")
+            print("   Set in Railway: ADMIN_EMAIL=noreply@4dgaming.games")
+            return
+        
+        # Check if using Gmail for sender (won't work with Resend)
+        if "@gmail.com" in sender_email.lower():
+            print("⚠️  WARNING: Gmail detected for sending. Use ADMIN_EMAIL with custom domain.")
+            print("   Set in Railway: ADMIN_EMAIL=noreply@4dgaming.games")
             print("   Transcript logged above ↑")
-            return  # Skip email, but continue (don't crash)
+            return
+        
+        print(f"📧 Sending notification from: {sender_email} to: {recipient_email}")
         
         params = {
-            "from": from_email,
-            "to": [from_email],
+            "from": sender_email,
+            "to": [recipient_email],
             "subject": f"🔔 Live Call Transfer - {from_number}",
             "html": f"""
             <div style="font-family: Arial, sans-serif; max-width: 600px;">
