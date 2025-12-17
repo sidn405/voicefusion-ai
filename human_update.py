@@ -43,6 +43,10 @@ SERVER_URL = os.getenv("SERVER_URL", "https://voicefusion-ai-production.up.railw
 # Conversation memory
 conversations = {}
 
+# Deduplication tracking (prevent duplicate emails)
+sent_notifications = set()  # Track transfer notifications by call_sid
+sent_integration_forms = set()  # Track integration forms by email+project_id
+
 # Twilio voice configuration (Amazon Polly voices)
 # Options: Polly.Joanna (female), Polly.Matthew (male), Polly.Salli (female)
 VOICE = "Polly.Joanna"  # Professional female voice
@@ -219,7 +223,7 @@ STEP 10: "Great! Look at the right side of your screen for the project summary. 
 
 STEP 11: "Perfect! If you have any files to upload or messages to add, you can click 'Browse'. Otherwise, we can move to payment. Ready to continue?"
 
-STEP 12: "Excellent! You'll see the 'Fund Milestone 1' button with your total amount. Click it and you'll be taken to our secure Stripe payment page. The payment includes everything you selected. Let me know when you're on the payment page."
+STEP 12: "Excellent! You'll see the 'Fund Milestone 1' button with your total amount. Click it and you'll be taken to our secure Stripe payment page. The totalpayment includes everything you selected. Let me know when you're on the payment page."
 
 STEP 13: "Take your time completing the payment. I'm right here if you have questions. Let me know when it's done."
 
@@ -669,6 +673,12 @@ async def payment_confirmed_webhook(request: Request):
         phone_number = data.get("phone_number")
         amount = data.get("amount")
         
+        # Prevent duplicate webhook processing (Stripe retries)
+        webhook_key = f"payment:{project_id}:{user_email}"
+        if webhook_key in sent_integration_forms:
+            print(f"⏭️  Skipping duplicate webhook for project {project_id}")
+            return {"status": "success", "message": "Already processed"}
+        
         print("=" * 70)
         print("💰 PAYMENT CONFIRMED WEBHOOK RECEIVED")
         print("=" * 70)
@@ -737,6 +747,16 @@ async def test_webhook():
 
 def send_integration_form_email(client_email: str, client_name: str, firm_name: str):
     """Send integration form link to client after payment"""
+    
+    # Prevent duplicate integration form emails
+    dedup_key = f"{client_email}:{firm_name}"
+    if dedup_key in sent_integration_forms:
+        print(f"⏭️  Skipping duplicate integration form for {client_email}")
+        return
+    
+    # Mark as sent
+    sent_integration_forms.add(dedup_key)
+    
     try:
         # Prefer ADMIN_EMAIL (custom domain) over FROM_EMAIL (might be Gmail)
         admin_email = os.getenv("ADMIN_EMAIL")
@@ -785,7 +805,7 @@ def send_integration_form_email(client_email: str, client_name: str, firm_name: 
                     <li>Complete the integration form (takes ~10 minutes)</li>
                     <li>Our team reviews your information within 24 hours</li>
                     <li>You'll receive your project timeline and start date</li>
-                    <li>Design and development begins (2 weeks)</li>
+                    <li>Design and development takes (2 weeks)</li>
                     <li>You get your custom LawBot 360!</li>
                 </ol>
                 
@@ -828,6 +848,14 @@ def send_integration_form_email(client_email: str, client_name: str, firm_name: 
 
 def notify_human_transfer(from_number: str, call_sid: str, reason: str):
     """Send email notification with conversation transcript (optional - fails gracefully)"""
+    
+    # Prevent duplicate notifications for the same call
+    if call_sid in sent_notifications:
+        print(f"⏭️  Skipping duplicate notification for call {call_sid}")
+        return
+    
+    # Mark this call as notified
+    sent_notifications.add(call_sid)
     
     # Get conversation history if available
     conversation_text = "No conversation history available"
