@@ -25,6 +25,19 @@ twilio_client = Client(
 
 # Configuration
 HUMAN_PHONE = os.getenv("PHONE")
+
+# Validate phone number format on startup
+if HUMAN_PHONE:
+    # Clean phone number - ensure it's in E.164 format
+    if not HUMAN_PHONE.startswith('+'):
+        print(f"⚠️  WARNING: PHONE number should start with + (E.164 format)")
+        print(f"   Current: {HUMAN_PHONE}")
+        print(f"   Should be: +15043833692")
+    else:
+        print(f"✅ Human transfer number configured: {HUMAN_PHONE}")
+else:
+    print("❌ WARNING: PHONE environment variable not set! Transfers will fail.")
+    print("   Set in Railway: PHONE=+15043833692")
 SERVER_URL = os.getenv("SERVER_URL", "https://voicefusion-ai-production.up.railway.app")
 
 # Conversation memory
@@ -35,6 +48,29 @@ conversations = {}
 VOICE = "Polly.Joanna"  # Professional female voice
 
 
+def transfer_to_human(response: VoiceResponse, reason: str = "Transfer requested"):
+    """Helper function to transfer call with proper error handling"""
+    if not HUMAN_PHONE:
+        print(f"❌ Cannot transfer: PHONE not configured")
+        response.say("I apologize, but I'm unable to transfer you right now. Please call us directly at 504-383-3692.", voice=VOICE)
+        return response
+    
+    print(f"🔄 Transferring to {HUMAN_PHONE}. Reason: {reason}")
+    
+    try:
+        response.dial(
+            number=HUMAN_PHONE,
+            timeout=30,
+            action='/voice/dial-status',
+            method='POST'
+        )
+    except Exception as e:
+        print(f"❌ Dial error: {e}")
+        response.say("I'm having trouble connecting. Please call us directly at 504-383-3692.", voice=VOICE)
+    
+    return response
+
+
 def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
     """Get AI response based on conversation context"""
     
@@ -43,65 +79,209 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
         conversations[call_sid] = {
             "history": [],
             "stage": "greeting",
+            "phase": "SALES",  # Start in SALES phase
+            "current_step": 0,
+            "committed": False,
             "client_name": None,
             "firm_name": None,
-            "pain_points": [],
-            "interested": False
+            "email": None,
+            "phone_number": None,  # Will be populated from caller ID
+            "selected_addons": [],
+            "selected_maintenance": None,
+            "payment_completed": False,
+            "payment_confirmed_by_webhook": False  # Only true when webhook confirms
         }
     
     conv = conversations[call_sid]
     conv["history"].append({"role": "user", "content": user_input})
     
-    # Build system prompt for sales bot
-    system_prompt = f"""You are a professional sales representative for LawBot 360, an AI client intake system for law firms.
+    # Detect if they've committed to moving forward
+    user_input_lower = user_input.lower()
+    interest_phrases = ['yes', 'let\'s do it', 'i\'m interested', 'tell me more', 'sounds good', 'let\'s get started', 'i want it', 'okay', 'sure', 'that works']
+    
+    # Check if we should switch from SALES to ONBOARDING phase
+    if conv["phase"] == "SALES" and any(phrase in user_input_lower for phrase in interest_phrases):
+        # Look at conversation context - if we've built value and they're showing interest
+        recent_history = ' '.join([msg.get('content', '') for msg in conv["history"][-3:]])
+        if any(word in recent_history.lower() for word in ['make sense', 'help your firm', 'get you set up', 'ready', 'start']):
+            conv["committed"] = True
+            conv["phase"] = "ONBOARDING"
+            print("✅ Interest confirmed! Switching to ONBOARDING mode")
+    
+    # Build system prompt based on phase
+    if conv["phase"] == "SALES":
+        system_prompt = f"""You are a professional sales representative for LawBot 360, an AI client intake system for law firms.
 
 Current stage: {stage}
 Client name: {conv.get('client_name', 'Unknown')}
 Firm: {conv.get('firm_name', 'Unknown')}
+Phase: SALES MODE - Building Value
 
-YOUR GOAL: Have a natural sales conversation about LawBot 360 ($25,000 base price, $7,500 down payment)
+YOUR GOAL: Build interest and value, then transition to setup when they show interest
 
 CRITICAL RULES:
-1. Keep responses EXTREMELY SHORT (1-2 sentences max) - this is a phone call
-2. Sound natural and conversational - like calling a friend
-3. Ask ONE question at a time and wait for their answer
-4. Don't mention transferring to humans - you ARE the conversation
-5. Use their name when you know it
-6. Be warm, confident, and consultative (not pushy)
+1. Be PROFESSIONAL and CONSULTATIVE - you're a trusted advisor, not pushy
+2. Keep responses SHORT (1-2 sentences max) - this is a phone call
+3. NEVER MENTION PRICING - they'll see it in the portal
+4. Focus on BENEFITS and ROI, not features
+5. Ask questions to understand their needs
+6. When they show interest → transition to setup
+7. Be warm, confident, and helpful
 
 PRODUCT: LawBot 360
 - 24/7 AI-powered client intake chatbot
 - Automatic lead qualification and consultation scheduling
 - Integrates with Clio, Salesforce, MyCase
 - Customizable for any practice area
-- Base price: $25,000 one-time, $7,500 down to start
+- Proven to increase client intake by 40%
 
-CONVERSATION FLOW:
+CONSULTATIVE APPROACH:
 1. Opening: "Great! I'm here to help. Quick question - are you currently losing leads when your office is closed?"
 2. Discovery: Ask about their current intake process (ONE question at a time)
 3. Pain points: Listen and identify what's not working
-4. Solution: Show how LawBot 360 solves THEIR specific problems
-5. Pricing: Discuss investment only when they're interested
-6. Close: Get commitment or schedule a demo
+4. Solution: "LawBot 360 handles that 24/7 - our clients see 40% more consultations"
+5. Value: "If you could capture even 2-3 more quality leads per month, that would be significant, right?"
+6. Trial close: "Does that sound like it would help your firm?"
+7. When they say YES → Transition: "Perfect! Let's get you set up right now so you can start capturing those leads."
 
-Remember: SHORT responses, ONE question at a time, natural and friendly!
+NEVER MENTION:
+- ❌ Pricing or costs ($7,500, $25,000, etc.)
+- ❌ Down payments
+- ❌ Payment terms
+- ❌ Specific dollar amounts
+- ❌ "Investment" or "cost"
+
+Instead focus on:
+- ✅ Benefits (24/7 coverage, more clients)
+- ✅ ROI (more cases captured)
+- ✅ Pain relief (no more missed leads)
+- ✅ Value (how it helps their practice)
+
+OBJECTION HANDLING (without mentioning price):
+- "How much does it cost?" → "Great question! You'll see all the details when we get you set up. First, does the concept make sense for your practice?"
+- "Is it expensive?" → "It's an investment in growing your practice. Most firms see it pay for itself quickly. Let's get you set up and you can see all the options."
+- "What's the price?" → "I'll show you everything when we set you up. But tell me - if you could capture 40% more leads, would that be valuable?"
+
+Remember: Build VALUE, then transition to setup. Never discuss pricing!
+"""
+    
+    else:  # ONBOARDING phase
+        system_prompt = f"""You are a patient, helpful onboarding specialist for 4D Gaming.
+
+Current stage: {stage}
+Current step: {conv.get('current_step', 0)}/14
+Client name: {conv.get('client_name', 'Unknown')}
+Firm: {conv.get('firm_name', 'Unknown')}
+Phase: ONBOARDING MODE
+
+YOUR GOAL: Walk them through COMPLETE setup - from portal login to payment completion
+
+ONBOARDING RULES:
+1. Be PATIENT and FRIENDLY - guide them gently
+2. ONE step at a time - wait for confirmation
+3. Keep responses SHORT (1-2 sentences)
+4. Answer questions about features thoroughly
+5. Let THEM discover pricing in the portal (don't mention it)
+6. If they ask about add-on features, explain the benefits
+
+ONBOARDING STEPS:
+
+STEP 1: "Perfect! Let's get you set up right now. Open your browser and go to 4dgaming.games/client-portal.html. Tell me when you have it open."
+
+STEP 2: "Great! Now create your account or log in if you have one. Let me know when you're in."
+
+STEP 3: "Excellent! Scroll down and look for 'Start a new project'. Do you see it?"
+
+STEP 4: "Perfect! Click the dropdown for 'Select service', then scroll down and choose 'LawBot 360'. Tell me when you've selected it."
+
+STEP 5: "Great! Where it says 'Project name', enter your firm's name. What's your firm name?"
+
+STEP 6: "Good! Fill in 'Brief description' - just describe what you need for your practice. Then complete 'Project details'. Let me know when you're ready."
+
+STEP 7: "Now you'll see Optional Features - add-ons you might want:
+- Native iOS & Android apps - gives your clients mobile access
+- Multi-language support - serve diverse communities
+- Advanced Analytics - track your ROI and performance
+- SMS/WhatsApp integration - reach clients where they are
+- Multi-location support - for firms with multiple offices
+Would you like any of these add-ons? If you're not sure, you can skip them."
+
+STEP 8: "Perfect! Now choose a Monthly Maintenance Plan:
+- Basic: Hosting, security updates, bug fixes, email support
+- Professional: Everything in Basic plus priority support and monthly feature updates  
+- Enterprise: Everything plus 24/7 support and custom feature development
+Or you can select 'No Maintenance Plan' if you prefer to handle it yourself.
+Which makes sense for your firm?"
+
+STEP 9: "Excellent! Click the 'Create Project' button. Let me know when it's created."
+
+STEP 10: "Great! Look at the right side of your screen for the project summary. Do you see it?"
+
+STEP 11: "Perfect! If you have any files to upload or messages to add, you can click 'Browse'. Otherwise, we can move to payment. Ready to continue?"
+
+STEP 12: "Excellent! You'll see the 'Fund Milestone 1' button with your total amount. Click it and you'll be taken to our secure Stripe payment page. The payment includes everything you selected. Let me know when you're on the payment page."
+
+STEP 13: "Take your time completing the payment. I'm right here if you have questions. Let me know when it's done."
+
+STEP 14: "Congratulations! Your payment is complete. Here's what happens next:
+- Our team reviews your project within 24 hours
+- You'll receive your project timeline and start date  
+- Setup takes 2 weeks
+- You'll receive the integration form via email shortly
+
+Do you have any questions about the process or your new LawBot 360 system?"
+
+Remember: Be PATIENT, HELPFUL, ONE STEP AT A TIME. They'll see pricing in the portal naturally.
 """
     
     # Get AI response
     messages = [
         {"role": "system", "content": system_prompt}
-    ] + conv["history"][-10:]  # Last 10 messages
+    ] + conv["history"][-15:]
     
     try:
         response = openai_client.chat.completions.create(
             model="gpt-4-turbo-preview",
             messages=messages,
             temperature=0.7,
-            max_tokens=80  # Even shorter - force brevity!
+            max_tokens=120
         )
         
         ai_response = response.choices[0].message.content
         conv["history"].append({"role": "assistant", "content": ai_response})
+        
+        # Track onboarding step progression
+        if conv["phase"] == "ONBOARDING":
+            response_lower = ai_response.lower()
+            if "4dgaming.games/client-portal" in response_lower:
+                conv["current_step"] = 1
+            elif "create your account" in response_lower or "log in" in response_lower:
+                conv["current_step"] = 2
+            elif "start a new project" in response_lower:
+                conv["current_step"] = 3
+            elif "select service" in response_lower or "choose 'lawbot" in response_lower:
+                conv["current_step"] = 4
+            elif "project name" in response_lower and "firm" in response_lower:
+                conv["current_step"] = 5
+            elif "brief description" in response_lower:
+                conv["current_step"] = 6
+            elif "optional features" in response_lower or "add-ons" in response_lower:
+                conv["current_step"] = 7
+            elif "maintenance plan" in response_lower:
+                conv["current_step"] = 8
+            elif "create project" in response_lower and "button" in response_lower:
+                conv["current_step"] = 9
+            elif "project summary" in response_lower:
+                conv["current_step"] = 10
+            elif "upload" in response_lower or "files" in response_lower or "browse" in response_lower:
+                conv["current_step"] = 11
+            elif "fund milestone" in response_lower or "payment page" in response_lower:
+                conv["current_step"] = 12
+            elif "take your time" in response_lower and "payment" in response_lower:
+                conv["current_step"] = 13
+            elif "congratulations" in response_lower:
+                conv["current_step"] = 14
+                conv["payment_completed"] = True
         
         return ai_response
         
@@ -155,7 +335,7 @@ async def handle_inbound_call(request: Request):
     
     # Default to human if no response
     response.say("I didn't receive a selection. Transferring you now.", voice=VOICE)
-    response.dial(HUMAN_PHONE)
+    transfer_to_human(response, "No selection received")
     
     return PlainTextResponse(content=str(response), media_type="application/xml")
 
@@ -283,19 +463,19 @@ async def handle_choice(request: Request):
         # Still no response - transfer
         response.say("Let me connect you with someone who can help.", voice=VOICE)
         notify_human_transfer(from_number, call_sid, "No response after initial greeting")
-        response.dial(HUMAN_PHONE)
+        transfer_to_human(response, "Transfer needed")
         
     elif choice == '2':
         # Transfer to human
         notify_human_transfer(from_number, call_sid, "User requested human from menu")
         response.say("Connecting you now.", voice=VOICE)
-        response.dial(HUMAN_PHONE)
+        transfer_to_human(response, "Transfer needed")
         
     else:
         # Invalid choice - transfer to human
         response.say("Let me transfer you to a team member.", voice=VOICE)
         notify_human_transfer(from_number, call_sid, "Invalid menu choice")
-        response.dial(HUMAN_PHONE)
+        transfer_to_human(response, "Transfer needed")
     
     return PlainTextResponse(content=str(response), media_type="application/xml")
 
@@ -316,12 +496,37 @@ async def conversation(request: Request):
     if '*' in digits or any(word in speech_result.lower() for word in ['human', 'person', 'representative', 'transfer']):
         response.say("Of course, let me transfer you to a specialist now.", voice=VOICE)
         notify_human_transfer(from_number, call_sid, "User requested transfer during conversation")
-        response.dial(HUMAN_PHONE)
+        transfer_to_human(response, "User requested")
         return PlainTextResponse(content=str(response), media_type="application/xml")
     
     # Get AI response based on what they said
     if speech_result:
         print(f"📞 User said: {speech_result}")
+        
+        # Capture phone number (caller's number)
+        if call_sid in conversations:
+            conversations[call_sid]["phone_number"] = from_number
+        
+        # Check if user provided email address
+        if "@" in speech_result and "." in speech_result:
+            # Extract email from speech (rough extraction)
+            words = speech_result.lower().split()
+            for word in words:
+                if "@" in word and "." in word:
+                    if call_sid in conversations:
+                        email = word.strip(".,!?")
+                        conversations[call_sid]["email"] = email
+                        print(f"📧 Email captured: {email}")
+        
+        # Check if user provided firm name
+        if "firm" in speech_result.lower() or "law" in speech_result.lower():
+            if call_sid in conversations:
+                # Try to extract firm name (this is rough - might need refinement)
+                conversations[call_sid]["firm_name"] = speech_result
+        
+        # NOTE: Payment confirmation now comes from webhook, not user speech
+        # Removed automatic integration form sending based on keywords
+        
         ai_text = get_ai_response(call_sid, speech_result, "conversation")
         print(f"🤖 AI responding: {ai_text}")
         
@@ -329,7 +534,7 @@ async def conversation(request: Request):
         if "transfer" in ai_text.lower() or "specialist" in ai_text.lower():
             response.say(ai_text, voice=VOICE)
             notify_human_transfer(from_number, call_sid, "AI determined human needed")
-            response.dial(HUMAN_PHONE)
+            transfer_to_human(response, "Transfer needed")
             return PlainTextResponse(content=str(response), media_type="application/xml")
         
         # Say AI response
@@ -337,38 +542,80 @@ async def conversation(request: Request):
         
         # Continue conversation - wait for their response
         gather = Gather(
-            input='speech',  # Only speech (no DTMF needed during conversation)
+            input='speech',
             action='/voice/conversation',
             method='POST',
-            speech_timeout='auto',  # Auto-detect when they stop talking
-            timeout=10,  # Wait up to 10 seconds for them to start talking
+            speech_timeout='auto',
+            timeout=15,  # Give them more time (was 10)
             finish_on_key='#'
         )
         response.append(gather)
         
-        # If they don't respond after timeout, prompt again
+        # If no response, just say "Are you still there?" and try ONE more time
+        # Don't immediately transfer - give them more chances
         response.say("Are you still there?", voice=VOICE)
         
-        # Give them another chance
         gather2 = Gather(
             input='speech',
             action='/voice/conversation',
             method='POST',
-            timeout=10
+            timeout=15
         )
         response.append(gather2)
         
-        # If still no response, offer human
+        # If STILL no response, say you'll wait and try again
+        response.say("I'm still here. Let me know when you're ready.", voice=VOICE)
+        
+        gather3 = Gather(
+            input='speech',
+            action='/voice/conversation',
+            method='POST',
+            timeout=15
+        )
+        response.append(gather3)
+        
+        # Only after 3 failed attempts, transfer
         response.say("I'm having trouble hearing you. Let me transfer you to someone who can help.", voice=VOICE)
         notify_human_transfer(from_number, call_sid, "No response after multiple attempts")
-        response.dial(HUMAN_PHONE)
+        transfer_to_human(response, "Transfer needed")
         
     else:
         # No speech detected at all
         print("⚠️ No speech result received")
         response.say("I'm sorry, I didn't hear anything. Let me connect you with a human specialist.", voice=VOICE)
         notify_human_transfer(from_number, call_sid, "No speech detected")
-        response.dial(HUMAN_PHONE)
+        transfer_to_human(response, "Transfer needed")
+    
+    return PlainTextResponse(content=str(response), media_type="application/xml")
+
+
+@app.post("/voice/dial-status")
+async def dial_status(request: Request):
+    """Track dial status for debugging"""
+    form_data = await request.form()
+    dial_call_status = form_data.get('DialCallStatus')
+    dial_call_duration = form_data.get('DialCallDuration')
+    
+    print(f"📞 Dial Status: {dial_call_status}, Duration: {dial_call_duration}s")
+    
+    response = VoiceResponse()
+    
+    if dial_call_status in ['completed', 'answered']:
+        # Call was answered and completed
+        print("✅ Transfer successful!")
+        response.say("Thank you for using our service. Goodbye!", voice=VOICE)
+    elif dial_call_status == 'busy':
+        print("❌ Transfer failed: Line busy")
+        response.say("I'm sorry, the line is busy. Please try again later or call us directly at 504-383-3692.", voice=VOICE)
+    elif dial_call_status == 'no-answer':
+        print("❌ Transfer failed: No answer")
+        response.say("I'm sorry, no one answered. Please call us directly at 504-383-3692 or try again later.", voice=VOICE)
+    elif dial_call_status == 'failed':
+        print("❌ Transfer failed: Call failed")
+        response.say("I'm sorry, the transfer failed. Please call us directly at 504-383-3692.", voice=VOICE)
+    else:
+        print(f"⚠️  Unknown dial status: {dial_call_status}")
+        response.say("Thank you for calling.", voice=VOICE)
     
     return PlainTextResponse(content=str(response), media_type="application/xml")
 
@@ -388,7 +635,7 @@ async def fallback_choice(request: Request):
         # Transfer to human
         response.say("Great, connecting you now.", voice=VOICE)
         notify_human_transfer(from_number, call_sid, "User chose human from fallback")
-        response.dial(HUMAN_PHONE)
+        transfer_to_human(response, "Transfer needed")
     else:
         # Continue with AI
         response.say("Okay, let's continue. Tell me about your law firm's current intake process.", voice=VOICE)
@@ -405,44 +652,267 @@ async def fallback_choice(request: Request):
         # If still no response, transfer
         response.say("Let me connect you with someone.", voice=VOICE)
         notify_human_transfer(from_number, call_sid, "Multiple failed attempts")
-        response.dial(HUMAN_PHONE)
+        transfer_to_human(response, "Transfer needed")
     
     return PlainTextResponse(content=str(response), media_type="application/xml")
 
 
-def notify_human_transfer(from_number: str, call_sid: str, reason: str):
-    """Send email notification with conversation transcript"""
+@app.post("/webhook/payment-confirmed")
+async def payment_confirmed_webhook(request: Request):
+    """Receive payment confirmation from backend/Stripe"""
     try:
-        # Get conversation history if available
-        conversation_html = "<p><em>No conversation history available</em></p>"
+        data = await request.json()
         
-        if call_sid in conversations:
-            conv = conversations[call_sid]
-            if conv["history"]:
-                conversation_html = "<h3>Conversation Transcript:</h3><div style='background: #f5f5f5; padding: 15px; border-radius: 5px;'>"
-                
-                for msg in conv["history"]:
-                    role = msg.get("role", "unknown")
-                    content = msg.get("content", "")
-                    
-                    if role == "user":
-                        conversation_html += f"<p><strong>Prospect:</strong> {content}</p>"
-                    elif role == "assistant":
-                        conversation_html += f"<p><strong>AI Bot:</strong> {content}</p>"
-                
-                conversation_html += "</div>"
-                
-                # Add context info
-                if conv.get("client_name"):
-                    conversation_html += f"<p><strong>Client Name:</strong> {conv['client_name']}</p>"
-                if conv.get("firm_name"):
-                    conversation_html += f"<p><strong>Firm Name:</strong> {conv['firm_name']}</p>"
-                if conv.get("pain_points"):
-                    conversation_html += f"<p><strong>Pain Points Mentioned:</strong> {', '.join(conv['pain_points'])}</p>"
+        # Expected data: {project_id, user_email, amount, phone_number (optional)}
+        project_id = data.get("project_id")
+        user_email = data.get("user_email")
+        phone_number = data.get("phone_number")
+        amount = data.get("amount")
+        
+        print("=" * 70)
+        print("💰 PAYMENT CONFIRMED WEBHOOK RECEIVED")
+        print("=" * 70)
+        print(f"Project ID: {project_id}")
+        print(f"Email: {user_email}")
+        print(f"Phone: {phone_number}")
+        print(f"Amount: ${amount}")
+        print("=" * 70)
+        
+        # Find matching conversation by email or phone
+        matched_call_sid = None
+        for call_sid, conv in conversations.items():
+            conv_email = conv.get("email", "").lower()
+            conv_phone = conv.get("phone_number", "")
+            
+            # Match by email or phone
+            if (user_email and conv_email == user_email.lower()) or \
+               (phone_number and conv_phone == phone_number):
+                matched_call_sid = call_sid
+                print(f"✅ Matched to conversation: {call_sid}")
+                break
+        
+        if matched_call_sid:
+            # Mark payment as confirmed
+            conversations[matched_call_sid]["payment_completed"] = True
+            conversations[matched_call_sid]["payment_confirmed_by_webhook"] = True
+            conversations[matched_call_sid]["project_id"] = project_id
+            
+            # Send integration form
+            client_email = conversations[matched_call_sid].get("email")
+            client_name = conversations[matched_call_sid].get("client_name", "there")
+            firm_name = conversations[matched_call_sid].get("firm_name", "your firm")
+            
+            if client_email:
+                send_integration_form_email(client_email, client_name, firm_name)
+                print(f"📧 Integration form sent to {client_email}")
+            
+            return {"status": "success", "message": "Payment confirmed and integration form sent"}
+        else:
+            print("⚠️  No matching conversation found")
+            return {"status": "warning", "message": "Payment received but no active call found"}
+            
+    except Exception as e:
+        print(f"❌ Webhook error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/webhook/test")
+async def test_webhook():
+    """Test endpoint to verify webhook is accessible"""
+    return {
+        "status": "ok",
+        "message": "Webhook endpoint is working",
+        "endpoint": "/webhook/payment-confirmed",
+        "method": "POST",
+        "expected_data": {
+            "project_id": "string",
+            "user_email": "string",
+            "phone_number": "string (optional)",
+            "amount": "number"
+        }
+    }
+
+
+def send_integration_form_email(client_email: str, client_name: str, firm_name: str):
+    """Send integration form link to client after payment"""
+    try:
+        # Prefer ADMIN_EMAIL (custom domain) over FROM_EMAIL (might be Gmail)
+        admin_email = os.getenv("ADMIN_EMAIL")
+        from_email = os.getenv("FROM_EMAIL", "onboarding@resend.dev")
+        
+        # Use custom domain email if available
+        sender_email = admin_email if admin_email else from_email
+        
+        # Check if using Gmail (won't work with Resend)
+        if "@gmail.com" in sender_email.lower():
+            print("⚠️  WARNING: Gmail detected. Use ADMIN_EMAIL with custom domain instead.")
+            print(f"   Set in Railway: ADMIN_EMAIL=noreply@4dgaming.games")
+            print(f"   Manual action: Send this link to {client_email}:")
+            print(f"   https://4dgaming.games/client-integration.html")
+            return
+        
+        print(f"📧 Sending integration form from: {sender_email}")
         
         params = {
-            "from": os.getenv("FROM_EMAIL", "onboarding@resend.dev"),
-            "to": [os.getenv("FROM_EMAIL")],
+            "from": sender_email,
+            "to": [client_email],
+            "subject": f"Welcome to 4D Gaming - Integration Form for {firm_name}",
+            "html": f"""
+            <div style="font-family: Arial, sans-serif; max-width: 600px;">
+                <h2 style="color: #667eea;">Welcome to 4D Gaming! 🎉</h2>
+                
+                <p>Hi {client_name},</p>
+                
+                <p>Thank you for choosing LawBot 360! Your payment has been received and we're excited to get started on your custom AI client intake system.</p>
+                
+                <div style="background: #e7f3ff; padding: 20px; border-radius: 5px; margin: 20px 0;">
+                    <h3 style="margin-top: 0;">📋 Next Step: Complete Your Integration Form</h3>
+                    <p>To begin your project, please complete our integration form:</p>
+                    <p style="text-align: center; margin: 20px 0;">
+                        <a href="https://4dgaming.games/client-integration.html" 
+                           style="background: #667eea; color: white; padding: 15px 30px; 
+                                  text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
+                            Complete Integration Form
+                        </a>
+                    </p>
+                    <p style="font-size: 14px;">Or copy this link: https://4dgaming.games/client-integration.html</p>
+                </div>
+                
+                <h3>What Happens Next:</h3>
+                <ol>
+                    <li>Complete the integration form (takes ~10 minutes)</li>
+                    <li>Our team reviews your information within 24 hours</li>
+                    <li>You'll receive your project timeline and start date</li>
+                    <li>Design and development begins (2 weeks)</li>
+                    <li>You get your custom LawBot 360!</li>
+                </ol>
+                
+                <h3>What's Included:</h3>
+                <ul>
+                    <li>✅ 24/7 AI-powered client intake chatbot</li>
+                    <li>✅ Custom conversation flows for your practice areas</li>
+                    <li>✅ Lead qualification and consultation scheduling</li>
+                    <li>✅ Integration with your existing systems</li>
+                    <li>✅ Full training and support</li>
+                </ul>
+                
+                <div style="background: #fff3cd; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                    <p style="margin: 0;"><strong>Questions?</strong> Reply to this email or call us at (504) 383-3692</p>
+                </div>
+                
+                <p>Thank you for your business!</p>
+                
+                <p>Best regards,<br/>
+                The 4D Gaming Team<br/>
+                <a href="https://4dgaming.games">4dgaming.games</a></p>
+                
+                <p style="color: #666; font-size: 12px; margin-top: 30px;">
+                    This email was sent because you completed payment for LawBot 360 services.
+                </p>
+            </div>
+            """
+        }
+        
+        resend.Emails.send(params)
+        print(f"✅ Integration form email sent to {client_email}")
+        return True
+        
+    except Exception as e:
+        print(f"⚠️  Failed to send integration form email: {e}")
+        print(f"   Manual action: Send this link to {client_email}:")
+        print(f"   https://4dgaming.games/client-integration.html")
+        return False
+
+
+def notify_human_transfer(from_number: str, call_sid: str, reason: str):
+    """Send email notification with conversation transcript (optional - fails gracefully)"""
+    
+    # Get conversation history if available
+    conversation_text = "No conversation history available"
+    conversation_html = "<p><em>No conversation history available</em></p>"
+    
+    if call_sid in conversations:
+        conv = conversations[call_sid]
+        if conv["history"]:
+            # Build plain text version
+            conversation_text = "\n" + "="*50 + "\nCONVERSATION TRANSCRIPT:\n" + "="*50 + "\n"
+            
+            # Build HTML version
+            conversation_html = "<h3>Conversation Transcript:</h3><div style='background: #f5f5f5; padding: 15px; border-radius: 5px;'>"
+            
+            for msg in conv["history"]:
+                role = msg.get("role", "unknown")
+                content = msg.get("content", "")
+                
+                if role == "user":
+                    conversation_text += f"PROSPECT: {content}\n\n"
+                    conversation_html += f"<p><strong>Prospect:</strong> {content}</p>"
+                elif role == "assistant":
+                    conversation_text += f"AI BOT: {content}\n\n"
+                    conversation_html += f"<p><strong>AI Bot:</strong> {content}</p>"
+            
+            conversation_html += "</div>"
+            
+            # Add context info
+            if conv.get("client_name"):
+                conversation_text += f"\nClient Name: {conv['client_name']}\n"
+                conversation_html += f"<p><strong>Client Name:</strong> {conv['client_name']}</p>"
+            if conv.get("firm_name"):
+                conversation_text += f"Firm Name: {conv['firm_name']}\n"
+                conversation_html += f"<p><strong>Firm Name:</strong> {conv['firm_name']}</p>"
+            if conv.get("pain_points"):
+                conversation_text += f"Pain Points: {', '.join(conv['pain_points'])}\n"
+                conversation_html += f"<p><strong>Pain Points:</strong> {', '.join(conv['pain_points'])}</p>"
+    
+    # ALWAYS log to console (backup if email fails)
+    print("\n" + "="*70)
+    print("🔔 LIVE CALL TRANSFER")
+    print("="*70)
+    print(f"From: {from_number}")
+    print(f"Reason: {reason}")
+    print(f"Call SID: {call_sid}")
+    print(f"Transferring to: {HUMAN_PHONE}")
+    print(conversation_text)
+    print("="*70 + "\n")
+    
+    # Try to send email (but don't crash if it fails)
+    try:
+        # Prefer ADMIN_EMAIL (custom domain) for sending
+        admin_email = os.getenv("ADMIN_EMAIL")
+        from_email = os.getenv("FROM_EMAIL")
+        
+        # DEBUG: Log what we got from environment
+        print(f"🔍 DEBUG - ADMIN_EMAIL from env: {admin_email}")
+        print(f"🔍 DEBUG - FROM_EMAIL from env: {from_email}")
+        
+        # Use custom domain for sending
+        sender_email = admin_email if admin_email else from_email
+        
+        # Send notification to FROM_EMAIL (your personal email)
+        recipient_email = from_email if from_email else "onboarding@resend.dev"
+        
+        print(f"🔍 DEBUG - Will send from: {sender_email}")
+        print(f"🔍 DEBUG - Will send to: {recipient_email}")
+        
+        if not sender_email:
+            print("⚠️  No ADMIN_EMAIL or FROM_EMAIL set. Email not sent.")
+            print("   Set in Railway: ADMIN_EMAIL=noreply@4dgaming.games")
+            return
+        
+        # Check if using Gmail for sender (won't work with Resend)
+        if "@gmail.com" in sender_email.lower():
+            print("⚠️  WARNING: Gmail detected for sending. Use ADMIN_EMAIL with custom domain.")
+            print("   Set in Railway: ADMIN_EMAIL=noreply@4dgaming.games")
+            print("   Transcript logged above ↑")
+            return
+        
+        print(f"📧 Sending notification from: {sender_email} to: {recipient_email}")
+        
+        params = {
+            "from": sender_email,
+            "to": [recipient_email],
             "subject": f"🔔 Live Call Transfer - {from_number}",
             "html": f"""
             <div style="font-family: Arial, sans-serif; max-width: 600px;">
@@ -481,12 +951,13 @@ def notify_human_transfer(from_number: str, call_sid: str, reason: str):
             """
         }
         resend.Emails.send(params)
-        print(f"✅ Notified about transfer: {from_number}")
-        print(f"📧 Email sent with conversation transcript")
+        print(f"✅ Email sent successfully to {from_email}")
+        
     except Exception as e:
-        print(f"❌ Email notification error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"⚠️  Email notification failed (non-critical): {e}")
+        print("   Transcript is logged above - you can still see the conversation!")
+        print("   To enable emails: Use a verified domain email (not Gmail)")
+        print("   Or verify your domain at: https://resend.com/domains")
 
 
 if __name__ == "__main__":

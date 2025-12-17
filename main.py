@@ -85,9 +85,11 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
             "client_name": None,
             "firm_name": None,
             "email": None,
+            "phone_number": None,  # Will be populated from caller ID
             "selected_addons": [],
             "selected_maintenance": None,
-            "payment_completed": False
+            "payment_completed": False,
+            "payment_confirmed_by_webhook": False  # Only true when webhook confirms
         }
     
     conv = conversations[call_sid]
@@ -217,7 +219,7 @@ STEP 10: "Great! Look at the right side of your screen for the project summary. 
 
 STEP 11: "Perfect! If you have any files to upload or messages to add, you can click 'Browse'. Otherwise, we can move to payment. Ready to continue?"
 
-STEP 12: "Excellent! You'll see the 'Fund Milestone 1' button with your total amount. Click it and you'll be taken to our secure Stripe payment page. The total includes everything you selected. Let me know when you're on the payment page."
+STEP 12: "Excellent! You'll see the 'Fund Milestone 1' button with your total amount. Click it and you'll be taken to our secure Stripe payment page. The payment includes everything you selected. Let me know when you're on the payment page."
 
 STEP 13: "Take your time completing the payment. I'm right here if you have questions. Let me know when it's done."
 
@@ -225,7 +227,7 @@ STEP 14: "Congratulations! Your payment is complete. Here's what happens next:
 - Our team reviews your project within 24 hours
 - You'll receive your project timeline and start date  
 - Setup takes 2 weeks
-- You'll get the integration form via email: 4dgaming.games/client-integration.html
+- You'll receive the integration form via email shortly
 
 Do you have any questions about the process or your new LawBot 360 system?"
 
@@ -501,23 +503,9 @@ async def conversation(request: Request):
     if speech_result:
         print(f"📞 User said: {speech_result}")
         
-        # Check if user confirmed payment completion
-        payment_keywords = ['payment complete', 'payment is done', 'paid', 'payment went through', 'transaction complete', 'payment successful']
-        if any(keyword in speech_result.lower() for keyword in payment_keywords):
-            if call_sid in conversations:
-                conv = conversations[call_sid]
-                conv["payment_completed"] = True
-                
-                # Try to send integration form email
-                client_email = conv.get("email")
-                client_name = conv.get("client_name", "there")
-                firm_name = conv.get("firm_name", "your firm")
-                
-                if client_email:
-                    send_integration_form_email(client_email, client_name, firm_name)
-                    print(f"📧 Integration form email sent to {client_email}")
-                else:
-                    print("⚠️  No email address collected - cannot send integration form")
+        # Capture phone number (caller's number)
+        if call_sid in conversations:
+            conversations[call_sid]["phone_number"] = from_number
         
         # Check if user provided email address
         if "@" in speech_result and "." in speech_result:
@@ -526,14 +514,18 @@ async def conversation(request: Request):
             for word in words:
                 if "@" in word and "." in word:
                     if call_sid in conversations:
-                        conversations[call_sid]["email"] = word.strip(".,!?")
-                        print(f"📧 Email captured: {word}")
+                        email = word.strip(".,!?")
+                        conversations[call_sid]["email"] = email
+                        print(f"📧 Email captured: {email}")
         
         # Check if user provided firm name
         if "firm" in speech_result.lower() or "law" in speech_result.lower():
             if call_sid in conversations:
                 # Try to extract firm name (this is rough - might need refinement)
                 conversations[call_sid]["firm_name"] = speech_result
+        
+        # NOTE: Payment confirmation now comes from webhook, not user speech
+        # Removed automatic integration form sending based on keywords
         
         ai_text = get_ai_response(call_sid, speech_result, "conversation")
         print(f"🤖 AI responding: {ai_text}")
@@ -663,6 +655,84 @@ async def fallback_choice(request: Request):
         transfer_to_human(response, "Transfer needed")
     
     return PlainTextResponse(content=str(response), media_type="application/xml")
+
+
+@app.post("/webhook/payment-confirmed")
+async def payment_confirmed_webhook(request: Request):
+    """Receive payment confirmation from backend/Stripe"""
+    try:
+        data = await request.json()
+        
+        # Expected data: {project_id, user_email, amount, phone_number (optional)}
+        project_id = data.get("project_id")
+        user_email = data.get("user_email")
+        phone_number = data.get("phone_number")
+        amount = data.get("amount")
+        
+        print("=" * 70)
+        print("💰 PAYMENT CONFIRMED WEBHOOK RECEIVED")
+        print("=" * 70)
+        print(f"Project ID: {project_id}")
+        print(f"Email: {user_email}")
+        print(f"Phone: {phone_number}")
+        print(f"Amount: ${amount}")
+        print("=" * 70)
+        
+        # Find matching conversation by email or phone
+        matched_call_sid = None
+        for call_sid, conv in conversations.items():
+            conv_email = conv.get("email", "").lower()
+            conv_phone = conv.get("phone_number", "")
+            
+            # Match by email or phone
+            if (user_email and conv_email == user_email.lower()) or \
+               (phone_number and conv_phone == phone_number):
+                matched_call_sid = call_sid
+                print(f"✅ Matched to conversation: {call_sid}")
+                break
+        
+        if matched_call_sid:
+            # Mark payment as confirmed
+            conversations[matched_call_sid]["payment_completed"] = True
+            conversations[matched_call_sid]["payment_confirmed_by_webhook"] = True
+            conversations[matched_call_sid]["project_id"] = project_id
+            
+            # Send integration form
+            client_email = conversations[matched_call_sid].get("email")
+            client_name = conversations[matched_call_sid].get("client_name", "there")
+            firm_name = conversations[matched_call_sid].get("firm_name", "your firm")
+            
+            if client_email:
+                send_integration_form_email(client_email, client_name, firm_name)
+                print(f"📧 Integration form sent to {client_email}")
+            
+            return {"status": "success", "message": "Payment confirmed and integration form sent"}
+        else:
+            print("⚠️  No matching conversation found")
+            return {"status": "warning", "message": "Payment received but no active call found"}
+            
+    except Exception as e:
+        print(f"❌ Webhook error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/webhook/test")
+async def test_webhook():
+    """Test endpoint to verify webhook is accessible"""
+    return {
+        "status": "ok",
+        "message": "Webhook endpoint is working",
+        "endpoint": "/webhook/payment-confirmed",
+        "method": "POST",
+        "expected_data": {
+            "project_id": "string",
+            "user_email": "string",
+            "phone_number": "string (optional)",
+            "amount": "number"
+        }
+    }
 
 
 def send_integration_form_email(client_email: str, client_name: str, firm_name: str):
@@ -813,11 +883,18 @@ def notify_human_transfer(from_number: str, call_sid: str, reason: str):
         admin_email = os.getenv("ADMIN_EMAIL")
         from_email = os.getenv("FROM_EMAIL")
         
+        # DEBUG: Log what we got from environment
+        print(f"🔍 DEBUG - ADMIN_EMAIL from env: {admin_email}")
+        print(f"🔍 DEBUG - FROM_EMAIL from env: {from_email}")
+        
         # Use custom domain for sending
         sender_email = admin_email if admin_email else from_email
         
         # Send notification to FROM_EMAIL (your personal email)
         recipient_email = from_email if from_email else "onboarding@resend.dev"
+        
+        print(f"🔍 DEBUG - Will send from: {sender_email}")
+        print(f"🔍 DEBUG - Will send to: {recipient_email}")
         
         if not sender_email:
             print("⚠️  No ADMIN_EMAIL or FROM_EMAIL set. Email not sent.")
