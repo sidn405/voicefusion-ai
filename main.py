@@ -84,7 +84,7 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
             "history": [],
             "stage": "greeting",
             "phase": "SALES",  # Start in SALES phase
-            "current_step": 0,
+            "current_step": 1,
             "committed": False,
             "client_name": None,
             "firm_name": None,
@@ -93,26 +93,88 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
             "selected_addons": [],
             "selected_maintenance": None,
             "payment_completed": False,
-            "payment_confirmed_by_webhook": False  # Only true when webhook confirms
+            "payment_confirmed_by_webhook": False,  # Only true when webhook confirms
+            "silence_count": 0  # Track how many times we've had silence
         }
     
     conv = conversations[call_sid]
     conv["history"].append({"role": "user", "content": user_input})
     
     # Detect if they've committed to moving forward
-    user_input_lower = user_input.lower()
-    interest_phrases = ['yes', 'let\'s do it', 'i\'m interested', 'tell me more', 'sounds good', 'let\'s get started', 'i want it', 'okay', 'sure', 'that works']
+    user_input_lower = user_input.lower().strip()
+    
+    # Affirmative responses that indicate interest
+    affirmative_responses = ['yes', 'yeah', 'yep', 'yup', 'sure', 'okay', 'ok', 'definitely',
+                            'absolutely', 'let\'s do it', 'i\'m interested', 'sounds good', 
+                            'that works', 'i\'d like that', 'i want it', 'let\'s get started']
     
     # Check if we should switch from SALES to ONBOARDING phase
-    if conv["phase"] == "SALES" and any(phrase in user_input_lower for phrase in interest_phrases):
-        # Look at conversation context - if we've built value and they're showing interest
-        recent_history = ' '.join([msg.get('content', '') for msg in conv["history"][-3:]])
-        if any(word in recent_history.lower() for word in ['make sense', 'help your firm', 'get you set up', 'ready', 'start']):
+    if conv["phase"] == "SALES" and user_input_lower in affirmative_responses:
+        # User gave a clear affirmative response
+        
+        # Get last 2 bot messages to check what kind of question was asked
+        recent_bot_messages = [msg.get('content', '') for msg in conv["history"][-4:] 
+                              if msg.get('role') == 'assistant']
+        last_bot_message = recent_bot_messages[-1] if recent_bot_messages else ""
+        
+        # CLOSING QUESTIONS - These indicate we're asking for commitment
+        closing_indicators = [
+            'interested in learning more',
+            'does that sound',
+            'would that help',
+            'sound like it would help',
+            'make sense for your',
+            'ready to',
+            'want to get started',
+            'shall we get',
+            'would you like',
+            'does this sound',
+            'would this help',
+            'sound helpful',
+            'sound like a good fit'
+        ]
+        
+        # DISCOVERY QUESTIONS - These are just gathering info, NOT asking for commitment
+        discovery_indicators = [
+            'are you losing leads',
+            'do you have',
+            'are you currently',
+            'does your office',
+            'how does your',
+            'what happens when',
+            'do leads',
+            'does your receptionist',
+            'after hours',
+            'outside business hours'
+        ]
+        
+        # Check if last bot message was a closing question (not discovery)
+        is_closing_question = any(indicator in last_bot_message.lower() for indicator in closing_indicators)
+        is_discovery_question = any(indicator in last_bot_message.lower() for indicator in discovery_indicators)
+        
+        # Only switch if it's a closing question (NOT a discovery question)
+        if is_closing_question and not is_discovery_question:
             conv["committed"] = True
             conv["phase"] = "ONBOARDING"
-            print("✅ Interest confirmed! Switching to ONBOARDING mode")
+            conv["current_step"] = 1
+            print(f"✅ CLOSING QUESTION + YES: Switching to ONBOARDING")
+            print(f"   Bot asked: '{last_bot_message[:100]}...'")
+            print(f"   User said: '{user_input}'")
+        else:
+            # It's a discovery question or unclear - stay in SALES mode
+            print(f"🔍 Discovery question answered - staying in SALES mode")
+            print(f"   Question was: '{last_bot_message[:100]}...'")
+            print(f"   User answered: '{user_input}'")
     
     # Build system prompt based on phase
+    silence_context = ""
+    if stage == "conversation" and len(conv["history"]) > 2:
+        # Check if bot recently said "Are you still there?"
+        recent_bot_messages = [msg.get('content', '') for msg in conv["history"][-3:] 
+                              if msg.get('role') == 'assistant']
+        if any('still there' in msg.lower() for msg in recent_bot_messages):
+            silence_context = "\n\nNOTE: User had brief silence but is now responding. Acknowledge naturally and continue conversation without making a big deal of it."
+    
     if conv["phase"] == "SALES":
         system_prompt = f"""You are a professional sales representative for LawBot 360, an AI client intake system for law firms.
 
@@ -148,6 +210,12 @@ CONSULTATIVE APPROACH:
 6. Trial close: "Does that sound like it would help your firm?"
 7. When they say YES → Transition: "Perfect! Let's get you set up right now so you can start capturing those leads."
 
+HANDLING SHORT RESPONSES:
+- If they say just "yes", "yeah", "sure", "okay" → ALWAYS respond positively and move forward
+- Example: User says "Yes" → You say "Perfect! Let me show you how this works for your firm specifically..."
+- NEVER leave a "yes" response hanging - always acknowledge and continue
+- If you asked a question and they answered affirmatively, ACT ON IT
+
 NEVER MENTION:
 - ❌ Pricing or costs ($7,500, $25,000, etc.)
 - ❌ Down payments
@@ -167,18 +235,27 @@ OBJECTION HANDLING (without mentioning price):
 - "What's the price?" → "I'll show you everything when we set you up. But tell me - if you could capture 40% more leads, would that be valuable?"
 
 Remember: Build VALUE, then transition to setup. Never discuss pricing!
+{silence_context}
 """
     
     else:  # ONBOARDING phase
         system_prompt = f"""You are a patient, helpful onboarding specialist for 4D Gaming.
 
 Current stage: {stage}
-Current step: {conv.get('current_step', 0)}/14
+Current step: {conv.get('current_step', 1)}/14
 Client name: {conv.get('client_name', 'Unknown')}
 Firm: {conv.get('firm_name', 'Unknown')}
 Phase: ONBOARDING MODE
 
 YOUR GOAL: Walk them through COMPLETE setup - from portal login to payment completion
+
+CRITICAL: If user just said "yes" or showed interest, START IMMEDIATELY with Step 1!
+Don't ask if they're ready - they already said yes! Just begin the onboarding.
+
+WHEN FIRST ENTERING ONBOARDING (user just committed):
+- Immediately respond with: "Perfect! Let's get you set up right now. Open your browser and go to 4dgaming.games/client-portal.html. Tell me when you have it open."
+- Do NOT ask "Are you ready?" or "Shall we begin?" - they already committed!
+- Do NOT hesitate or wait - start Step 1 immediately
 
 ONBOARDING RULES:
 1. Be PATIENT and FRIENDLY - guide them gently
@@ -223,7 +300,7 @@ STEP 10: "Great! Look at the right side of your screen for the project summary. 
 
 STEP 11: "Perfect! If you have any files to upload or messages to add, you can click 'Browse'. Otherwise, we can move to payment. Ready to continue?"
 
-STEP 12: "Excellent! You'll see the 'Fund Milestone 1' button with your total amount. Click it and you'll be taken to our secure Stripe payment page. The totalpayment includes everything you selected. Let me know when you're on the payment page."
+STEP 12: "Excellent! You'll see the 'Fund Milestone 1' button with your total amount. Click it and you'll be taken to our secure Stripe payment page. The payment includes everything you selected. Let me know when you're on the payment page."
 
 STEP 13: "Take your time completing the payment. I'm right here if you have questions. Let me know when it's done."
 
@@ -236,6 +313,7 @@ STEP 14: "Congratulations! Your payment is complete. Here's what happens next:
 Do you have any questions about the process or your new LawBot 360 system?"
 
 Remember: Be PATIENT, HELPFUL, ONE STEP AT A TIME. They'll see pricing in the portal naturally.
+{silence_context}
 """
     
     # Get AI response
@@ -506,6 +584,7 @@ async def conversation(request: Request):
     # Get AI response based on what they said
     if speech_result:
         print(f"📞 User said: {speech_result}")
+        print(f"🔍 Current phase: {conversations.get(call_sid, {}).get('phase', 'UNKNOWN')}")
         
         # Capture phone number (caller's number)
         if call_sid in conversations:
@@ -533,6 +612,11 @@ async def conversation(request: Request):
         
         ai_text = get_ai_response(call_sid, speech_result, "conversation")
         print(f"🤖 AI responding: {ai_text}")
+        
+        # Safety check: If AI response is empty or very short, regenerate
+        if not ai_text or len(ai_text.strip()) < 10:
+            print("⚠️ AI response too short, using fallback")
+            ai_text = "I'm here to help. Could you tell me more about that?"
         
         # Check if AI wants to transfer
         if "transfer" in ai_text.lower() or "specialist" in ai_text.lower():
