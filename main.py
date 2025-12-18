@@ -118,14 +118,14 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
         
         # Add context based on phase
         if conv["phase"] == "ONBOARDING":
-            return pricing_response + " You'll see all the specific options and costs in the portal. Have you opened number four d gaming dot games slash client dash portal dot html yet?"
+            return pricing_response + " You'll see all the specific options and costs in the portal. Have you opened the number four d gaming dot games slash client dash portal dot html yet?"
         else:  # SALES
             return pricing_response + " Most firms find it pays for itself within months. Does the concept make sense for your practice?"
     
     # If we JUST switched to onboarding (and NOT asking about price), provide Step 1 directly
     if conv.get("just_switched"):
         conv["just_switched"] = False  # Clear flag
-        step1_message = "Perfect! Open your browser and go to number four d gaming dot games slash client dash portal dot html. Tell me when you have it open."
+        step1_message = "Perfect! Open your browser and go to number the number four d gaming dot games slash client dash portal dot html. Tell me when you have it open."
         conv["history"].append({"role": "assistant", "content": step1_message})
         return step1_message
     
@@ -315,7 +315,7 @@ CRITICAL: If user just said "yes" or showed interest, START IMMEDIATELY with Ste
 Don't ask if they're ready - they already said yes! Just begin the onboarding.
 
 WHEN FIRST ENTERING ONBOARDING (user just committed):
-- Immediately respond with: "Perfect! Let's get you set up right now. Open your browser and go to number four d gaming dot games slash client dash portal dot html. Tell me when you have it open."
+- Immediately respond with: "Perfect! Let's get you set up right now. Open your browser and go to the neumber four d gaming dot games slash client dash portal dot html. Tell me when you have it open."
 - Do NOT ask "Are you ready?" or "Shall we begin?" - they already committed!
 - Do NOT hesitate or wait - start Step 1 immediately
 
@@ -327,7 +327,7 @@ ONBOARDING RULES:
    
    EXAMPLES:
    Q: "What's the price of the system?"
-   A: "LawBot 360 has a base price of $25,000, plus you can choose from several add-ons and an optional monthly maintenance plan. You'll see all the specific options and costs as we go through the portal setup. Now, have you opened number four d gaming dot games slash client dash portal dot html yet?"
+   A: "LawBot 360 has a base price of $25,000, plus you can choose from several add-ons and an optional monthly maintenance plan. You'll see all the specific options and costs as we go through the portal setup. Now, have you opened the number four d gaming dot games slash client dash portal dot html yet?"
    
    Q: "How much does this cost?"
    A: "The base system is $25,000 with customizable add-ons available. Let me walk you through the portal where you can see all the options. Have you got the portal open?"
@@ -350,7 +350,7 @@ ONBOARDING RULES:
 
 ONBOARDING STEPS:
 
-STEP 1: "Perfect! Let's get you set up right now. Open your browser and go to number four d gaming dot games slash client dash portal dot html. Tell me when you have it open."
+STEP 1: "Perfect! Let's get you set up right now. Open your browser and go to the number four d gaming dot games slash client dash portal dot html. Tell me when you have it open."
 
 STEP 2: "Great! Now create your account or log in if you have one. Let me know when you're in."
 
@@ -418,7 +418,7 @@ Remember: Be PATIENT, HELPFUL, ONE STEP AT A TIME. They'll see pricing in the po
         # Track onboarding step progression
         if conv["phase"] == "ONBOARDING":
             response_lower = ai_response.lower()
-            if "number four d gaming dot games slash client dash portal dot html" in response_lower:
+            if "the number four d gaming dot games slash client dash portal dot html" in response_lower:
                 conv["current_step"] = 1
             elif "create your account" in response_lower or "log in" in response_lower:
                 conv["current_step"] = 2
