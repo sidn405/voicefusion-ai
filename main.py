@@ -101,7 +101,8 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
     conv["history"].append({"role": "user", "content": user_input})
     
     # Detect if they've committed to moving forward
-    user_input_lower = user_input.lower().strip()
+    # Strip punctuation for better matching
+    user_input_clean = user_input.lower().strip().rstrip('.,!?;')
     
     # Affirmative responses that indicate interest
     affirmative_responses = ['yes', 'yeah', 'yep', 'yup', 'sure', 'okay', 'ok', 'definitely',
@@ -109,7 +110,7 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
                             'that works', 'i\'d like that', 'i want it', 'let\'s get started']
     
     # Check if we should switch from SALES to ONBOARDING phase
-    if conv["phase"] == "SALES" and user_input_lower in affirmative_responses:
+    if conv["phase"] == "SALES" and user_input_clean in affirmative_responses:
         # User gave a clear affirmative response
         
         # Get last 2 bot messages to check what kind of question was asked
@@ -131,7 +132,11 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
             'does this sound',
             'would this help',
             'sound helpful',
-            'sound like a good fit'
+            'sound like a good fit',
+            'let\'s get you set up',  # Strong closing phrase
+            'let\'s get started',
+            'start capturing those leads',
+            'get you set up'
         ]
         
         # DISCOVERY QUESTIONS - These are just gathering info, NOT asking for commitment
@@ -634,38 +639,48 @@ async def conversation(request: Request):
             action='/voice/conversation',
             method='POST',
             speech_timeout='auto',
-            timeout=15,  # Give them more time (was 10)
+            timeout=10,
             finish_on_key='#'
         )
         response.append(gather)
         
-        # If no response, just say "Are you still there?" and try ONE more time
-        # Don't immediately transfer - give them more chances
+        # If no response after first gather, prompt them
         response.say("Are you still there?", voice=VOICE)
         
         gather2 = Gather(
             input='speech',
             action='/voice/conversation',
             method='POST',
-            timeout=15
+            timeout=10
         )
         response.append(gather2)
         
-        # If STILL no response, say you'll wait and try again
+        # If STILL no response, try one more time
         response.say("I'm still here. Let me know when you're ready.", voice=VOICE)
         
         gather3 = Gather(
             input='speech',
             action='/voice/conversation',
             method='POST',
-            timeout=15
+            timeout=10
         )
         response.append(gather3)
         
-        # Only after 3 failed attempts, transfer
-        response.say("I'm having trouble hearing you. Let me transfer you to someone who can help.", voice=VOICE)
-        notify_human_transfer(from_number, call_sid, "No response after multiple attempts")
-        transfer_to_human(response, "Transfer needed")
+        # Only after ALL 3 gathers timeout (user truly not responding), then transfer
+        # NOTE: The below code is added to TwiML but only executes if all gathers timeout
+        response.say("I'm having trouble hearing you. Let me connect you with someone who can help.", voice=VOICE)
+        
+        # Add dial to TwiML (will only execute if all gathers timeout)
+        try:
+            response.dial(
+                number=HUMAN_PHONE,
+                timeout=30,
+                action='/voice/dial-status',
+                method='POST'
+            )
+        except Exception as e:
+            print(f"❌ Error adding dial to response: {e}")
+            response.say("Please call us directly at 504-383-3692.", voice=VOICE)
         
     else:
         # No speech detected at all
@@ -679,18 +694,22 @@ async def conversation(request: Request):
 
 @app.post("/voice/dial-status")
 async def dial_status(request: Request):
-    """Track dial status for debugging"""
+    """Track dial status and send notification when transfer connects"""
     form_data = await request.form()
     dial_call_status = form_data.get('DialCallStatus')
     dial_call_duration = form_data.get('DialCallDuration')
+    call_sid = form_data.get('CallSid')
+    from_number = form_data.get('From')
     
     print(f"📞 Dial Status: {dial_call_status}, Duration: {dial_call_duration}s")
     
     response = VoiceResponse()
     
     if dial_call_status in ['completed', 'answered']:
-        # Call was answered and completed
+        # Call was answered and completed - send notification now
         print("✅ Transfer successful!")
+        if call_sid and from_number:
+            notify_human_transfer(from_number, call_sid, "Transferred after no response to prompts")
         response.say("Thank you for using our service. Goodbye!", voice=VOICE)
     elif dial_call_status == 'busy':
         print("❌ Transfer failed: Line busy")
@@ -889,7 +908,7 @@ def send_integration_form_email(client_email: str, client_name: str, firm_name: 
                     <li>Complete the integration form (takes ~10 minutes)</li>
                     <li>Our team reviews your information within 24 hours</li>
                     <li>You'll receive your project timeline and start date</li>
-                    <li>Design and development takes (2 weeks)</li>
+                    <li>Design and development begins (2 weeks)</li>
                     <li>You get your custom LawBot 360!</li>
                 </ol>
                 
