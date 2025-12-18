@@ -38,7 +38,7 @@ if HUMAN_PHONE:
 else:
     print("❌ WARNING: PHONE environment variable not set! Transfers will fail.")
     print("   Set in Railway: PHONE=+15043833692")
-SERVER_URL = os.getenv("SERVER_URL", "https://voicefusion-ai-production.up.railway.app")
+SERVER_URL = os.getenv("SERVER_URL", "https://your-app.railway.app")
 
 # Conversation memory
 conversations = {}
@@ -100,8 +100,16 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
     conv = conversations[call_sid]
     conv["history"].append({"role": "user", "content": user_input})
     
+    # If we JUST switched to onboarding, provide Step 1 directly without regenerating
+    if conv.get("just_switched"):
+        conv["just_switched"] = False  # Clear flag
+        step1_message = "Perfect! Open your browser and go to 4dgaming.games/client-portal.html. Tell me when you have it open."
+        conv["history"].append({"role": "assistant", "content": step1_message})
+        return step1_message
+    
     # Detect if they've committed to moving forward
-    user_input_lower = user_input.lower().strip()
+    # Strip punctuation for better matching
+    user_input_clean = user_input.lower().strip().rstrip('.,!?;')
     
     # Affirmative responses that indicate interest
     affirmative_responses = ['yes', 'yeah', 'yep', 'yup', 'sure', 'okay', 'ok', 'definitely',
@@ -109,7 +117,7 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
                             'that works', 'i\'d like that', 'i want it', 'let\'s get started']
     
     # Check if we should switch from SALES to ONBOARDING phase
-    if conv["phase"] == "SALES" and user_input_lower in affirmative_responses:
+    if conv["phase"] == "SALES" and user_input_clean in affirmative_responses:
         # User gave a clear affirmative response
         
         # Get last 2 bot messages to check what kind of question was asked
@@ -131,7 +139,11 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
             'does this sound',
             'would this help',
             'sound helpful',
-            'sound like a good fit'
+            'sound like a good fit',
+            'let\'s get you set up',  # Strong closing phrase
+            'let\'s get started',
+            'start capturing those leads',
+            'get you set up'
         ]
         
         # DISCOVERY QUESTIONS - These are just gathering info, NOT asking for commitment
@@ -157,6 +169,7 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
             conv["committed"] = True
             conv["phase"] = "ONBOARDING"
             conv["current_step"] = 1
+            conv["just_switched"] = True  # Flag that we just switched
             print(f"✅ CLOSING QUESTION + YES: Switching to ONBOARDING")
             print(f"   Bot asked: '{last_bot_message[:100]}...'")
             print(f"   User said: '{user_input}'")
@@ -188,8 +201,8 @@ YOUR GOAL: Build interest and value, then transition to setup when they show int
 CRITICAL RULES:
 1. Be PROFESSIONAL and CONSULTATIVE - you're a trusted advisor, not pushy
 2. Keep responses SHORT (1-2 sentences max) - this is a phone call
-3. NEVER MENTION PRICING - they'll see it in the portal
-4. Focus on BENEFITS and ROI, not features
+3. Be TRANSPARENT about pricing when asked directly ($25k base + addons)
+4. Focus on BENEFITS and ROI, not just features
 5. Ask questions to understand their needs
 6. When they show interest → transition to setup
 7. Be warm, confident, and helpful
@@ -216,25 +229,31 @@ HANDLING SHORT RESPONSES:
 - NEVER leave a "yes" response hanging - always acknowledge and continue
 - If you asked a question and they answered affirmatively, ACT ON IT
 
-NEVER MENTION:
-- ❌ Pricing or costs ($7,500, $25,000, etc.)
-- ❌ Down payments
-- ❌ Payment terms
-- ❌ Specific dollar amounts
-- ❌ "Investment" or "cost"
+PRICING APPROACH:
+- Be TRANSPARENT when asked directly: "$25,000 base price plus add-ons"
+- Don't lead with pricing - build value first
+- When they ask → answer honestly and refocus on value
+- Use pricing objections as opportunities to discuss ROI
 
-Instead focus on:
+Focus on:
 - ✅ Benefits (24/7 coverage, more clients)
-- ✅ ROI (more cases captured)
+- ✅ ROI (more cases captured)  
 - ✅ Pain relief (no more missed leads)
 - ✅ Value (how it helps their practice)
+- ✅ Transparent pricing when asked
 
-OBJECTION HANDLING (without mentioning price):
-- "How much does it cost?" → "Great question! You'll see all the details when we get you set up. First, does the concept make sense for your practice?"
-- "Is it expensive?" → "It's an investment in growing your practice. Most firms see it pay for itself quickly. Let's get you set up and you can see all the options."
-- "What's the price?" → "I'll show you everything when we set you up. But tell me - if you could capture 40% more leads, would that be valuable?"
+OBJECTION HANDLING:
+**If asked about pricing directly:**
+- "How much does it cost?" → "LawBot 360 has a base price of $25,000, plus you can choose from several add-ons and an optional monthly maintenance plan. Most firms find it pays for itself within months. Does the concept make sense for your practice?"
+- "Is it expensive?" → "The base system is $25,000 with optional add-ons. It's an investment in growing your practice, and most firms see it pay for itself quickly with the additional cases captured. Would 24/7 lead capture be valuable for your firm?"
+- "What's the investment?" → "The system starts at $25,000 with customizable add-ons available. But first, does capturing leads 24/7 sound helpful for your practice?"
 
-Remember: Build VALUE, then transition to setup. Never discuss pricing!
+**General objection handling (without pricing context):**
+- Focus on ROI and value
+- Ask questions to understand their concerns
+- Build confidence in the solution
+
+Remember: Build VALUE, then transition to setup. Be transparent about pricing when asked directly!
 {silence_context}
 """
     
@@ -262,7 +281,7 @@ ONBOARDING RULES:
 2. ONE step at a time - wait for confirmation
 3. Keep responses SHORT (1-2 sentences)
 4. Answer questions about features thoroughly
-5. Let THEM discover pricing in the portal (don't mention it)
+5. **PRICING TRANSPARENCY:** When asked about cost/price, say: "LawBot 360 has a base price of $25,000, plus you can choose from several add-ons and an optional monthly maintenance plan that would increase the total price. You'll see all the details and options in the portal."
 6. If they ask about add-on features, explain the benefits
 
 ONBOARDING STEPS:
@@ -290,7 +309,7 @@ Would you like any of these add-ons? If you're not sure, you can skip them."
 STEP 8: "Perfect! Now choose a Monthly Maintenance Plan:
 - Basic: Hosting, security updates, bug fixes, email support
 - Professional: Everything in Basic plus priority support and monthly feature updates  
-- Enterprise: Everything plus 24/7 support and custom feature development
+- Premium: Everything plus 24/7 support and custom feature development
 Or you can select 'No Maintenance Plan' if you prefer to handle it yourself.
 Which makes sense for your firm?"
 
@@ -300,14 +319,14 @@ STEP 10: "Great! Look at the right side of your screen for the project summary. 
 
 STEP 11: "Perfect! If you have any files to upload or messages to add, you can click 'Browse'. Otherwise, we can move to payment. Ready to continue?"
 
-STEP 12: "Excellent! You'll see the 'Fund Milestone 1' button with your total amount. Click it and you'll be taken to our secure Stripe payment page. The payment includes everything you selected. Let me know when you're on the payment page."
+STEP 12: "Excellent! You'll see the 'Fund Milestone 1' button with your total amount. Click it and you'll be taken to our secure Stripe payment page. The total includes everything you selected. Let me know when you're on the payment page."
 
 STEP 13: "Take your time completing the payment. I'm right here if you have questions. Let me know when it's done."
 
 STEP 14: "Congratulations! Your payment is complete. Here's what happens next:
 - Our team reviews your project within 24 hours
 - You'll receive your project timeline and start date  
-- Setup takes 2 weeks
+- Setup takes 2-3 weeks
 - You'll receive the integration form via email shortly
 
 Do you have any questions about the process or your new LawBot 360 system?"
@@ -542,10 +561,19 @@ async def handle_choice(request: Request):
         )
         response.append(gather2)
         
-        # Still no response - transfer
+        # If still no response after 2 gathers, add transfer to TwiML
+        # (only executes if both gathers timeout)
         response.say("Let me connect you with someone who can help.", voice=VOICE)
-        notify_human_transfer(from_number, call_sid, "No response after initial greeting")
-        transfer_to_human(response, "Transfer needed")
+        try:
+            response.dial(
+                number=HUMAN_PHONE,
+                timeout=30,
+                action='/voice/dial-status',
+                method='POST'
+            )
+        except Exception as e:
+            print(f"❌ Error adding dial: {e}")
+            response.say("Please call us directly at 504-383-3692.", voice=VOICE)
         
     elif choice == '2':
         # Transfer to human
@@ -634,13 +662,12 @@ async def conversation(request: Request):
             action='/voice/conversation',
             method='POST',
             speech_timeout='auto',
-            timeout=15,  # Give them more time (was 10)
+            timeout=15,
             finish_on_key='#'
         )
         response.append(gather)
         
-        # If no response, just say "Are you still there?" and try ONE more time
-        # Don't immediately transfer - give them more chances
+        # If no response after first gather, prompt them
         response.say("Are you still there?", voice=VOICE)
         
         gather2 = Gather(
@@ -651,7 +678,7 @@ async def conversation(request: Request):
         )
         response.append(gather2)
         
-        # If STILL no response, say you'll wait and try again
+        # If STILL no response, try one more time
         response.say("I'm still here. Let me know when you're ready.", voice=VOICE)
         
         gather3 = Gather(
@@ -662,10 +689,21 @@ async def conversation(request: Request):
         )
         response.append(gather3)
         
-        # Only after 3 failed attempts, transfer
-        response.say("I'm having trouble hearing you. Let me transfer you to someone who can help.", voice=VOICE)
-        notify_human_transfer(from_number, call_sid, "No response after multiple attempts")
-        transfer_to_human(response, "Transfer needed")
+        # Only after ALL 3 gathers timeout (user truly not responding), then transfer
+        # NOTE: The below code is added to TwiML but only executes if all gathers timeout
+        response.say("I'm having trouble hearing you. Let me connect you with someone who can help.", voice=VOICE)
+        
+        # Add dial to TwiML (will only execute if all gathers timeout)
+        try:
+            response.dial(
+                number=HUMAN_PHONE,
+                timeout=30,
+                action='/voice/dial-status',
+                method='POST'
+            )
+        except Exception as e:
+            print(f"❌ Error adding dial to response: {e}")
+            response.say("Please call us directly at 504-383-3692.", voice=VOICE)
         
     else:
         # No speech detected at all
@@ -679,18 +717,22 @@ async def conversation(request: Request):
 
 @app.post("/voice/dial-status")
 async def dial_status(request: Request):
-    """Track dial status for debugging"""
+    """Track dial status and send notification when transfer connects"""
     form_data = await request.form()
     dial_call_status = form_data.get('DialCallStatus')
     dial_call_duration = form_data.get('DialCallDuration')
+    call_sid = form_data.get('CallSid')
+    from_number = form_data.get('From')
     
     print(f"📞 Dial Status: {dial_call_status}, Duration: {dial_call_duration}s")
     
     response = VoiceResponse()
     
     if dial_call_status in ['completed', 'answered']:
-        # Call was answered and completed
+        # Call was answered and completed - send notification now
         print("✅ Transfer successful!")
+        if call_sid and from_number:
+            notify_human_transfer(from_number, call_sid, "Transferred after no response to prompts")
         response.say("Thank you for using our service. Goodbye!", voice=VOICE)
     elif dial_call_status == 'busy':
         print("❌ Transfer failed: Line busy")
@@ -889,7 +931,7 @@ def send_integration_form_email(client_email: str, client_name: str, firm_name: 
                     <li>Complete the integration form (takes ~10 minutes)</li>
                     <li>Our team reviews your information within 24 hours</li>
                     <li>You'll receive your project timeline and start date</li>
-                    <li>Design and development takes (2 weeks)</li>
+                    <li>Design and development begins (2-3 weeks)</li>
                     <li>You get your custom LawBot 360!</li>
                 </ol>
                 

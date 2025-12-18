@@ -100,6 +100,13 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
     conv = conversations[call_sid]
     conv["history"].append({"role": "user", "content": user_input})
     
+    # If we JUST switched to onboarding, provide Step 1 directly without regenerating
+    if conv.get("just_switched"):
+        conv["just_switched"] = False  # Clear flag
+        step1_message = "Perfect! Open your browser and go to 4dgaming.games/client-portal.html. Tell me when you have it open."
+        conv["history"].append({"role": "assistant", "content": step1_message})
+        return step1_message
+    
     # Detect if they've committed to moving forward
     # Strip punctuation for better matching
     user_input_clean = user_input.lower().strip().rstrip('.,!?;')
@@ -162,6 +169,7 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
             conv["committed"] = True
             conv["phase"] = "ONBOARDING"
             conv["current_step"] = 1
+            conv["just_switched"] = True  # Flag that we just switched
             print(f"✅ CLOSING QUESTION + YES: Switching to ONBOARDING")
             print(f"   Bot asked: '{last_bot_message[:100]}...'")
             print(f"   User said: '{user_input}'")
@@ -221,25 +229,31 @@ HANDLING SHORT RESPONSES:
 - NEVER leave a "yes" response hanging - always acknowledge and continue
 - If you asked a question and they answered affirmatively, ACT ON IT
 
-NEVER MENTION:
-- ❌ Pricing or costs ($7,500, $25,000, etc.)
-- ❌ Down payments
-- ❌ Payment terms
-- ❌ Specific dollar amounts
-- ❌ "Investment" or "cost"
+PRICING APPROACH:
+- Be TRANSPARENT when asked directly: "$25,000 base price plus add-ons"
+- Don't lead with pricing - build value first
+- When they ask → answer honestly and refocus on value
+- Use pricing objections as opportunities to discuss ROI
 
-Instead focus on:
+Focus on:
 - ✅ Benefits (24/7 coverage, more clients)
-- ✅ ROI (more cases captured)
+- ✅ ROI (more cases captured)  
 - ✅ Pain relief (no more missed leads)
 - ✅ Value (how it helps their practice)
+- ✅ Transparent pricing when asked
 
-OBJECTION HANDLING (without mentioning price):
-- "How much does it cost?" → "Great question! You'll see all the details when we get you set up. First, does the concept make sense for your practice?"
-- "Is it expensive?" → "It's an investment in growing your practice. Most firms see it pay for itself quickly. Let's get you set up and you can see all the options."
-- "What's the price?" → "I'll show you everything when we set you up. But tell me - if you could capture 40% more leads, would that be valuable?"
+OBJECTION HANDLING:
+**If asked about pricing directly:**
+- "How much does it cost?" → "LawBot 360 has a base price of $25,000, plus you can choose from several add-ons and an optional monthly maintenance plan. Most firms find it pays for itself within months. Does the concept make sense for your practice?"
+- "Is it expensive?" → "The base system is $25,000 with optional add-ons. It's an investment in growing your practice, and most firms see it pay for itself quickly with the additional cases captured. Would 24/7 lead capture be valuable for your firm?"
+- "What's the investment?" → "The system starts at $25,000 with customizable add-ons available. But first, does capturing leads 24/7 sound helpful for your practice?"
 
-Remember: Build VALUE, then transition to setup. Never discuss pricing!
+**General objection handling (without pricing context):**
+- Focus on ROI and value
+- Ask questions to understand their concerns
+- Build confidence in the solution
+
+Remember: Build VALUE, then transition to setup. Be transparent about pricing when asked directly!
 {silence_context}
 """
     
@@ -548,9 +562,17 @@ async def handle_choice(request: Request):
         response.append(gather2)
         
         # Still no response - transfer
+        # NEW (FIXED):
         response.say("Let me connect you with someone who can help.", voice=VOICE)
-        notify_human_transfer(from_number, call_sid, "No response after initial greeting")
-        transfer_to_human(response, "Transfer needed")
+        try:
+            response.dial(
+                number=HUMAN_PHONE,
+                timeout=30,
+                action='/voice/dial-status',
+                method='POST'
+            )
+        except Exception as e:
+            response.say("Please call us directly at 504-383-3692.", voice=VOICE)
         
     elif choice == '2':
         # Transfer to human
@@ -908,7 +930,7 @@ def send_integration_form_email(client_email: str, client_name: str, firm_name: 
                     <li>Complete the integration form (takes ~10 minutes)</li>
                     <li>Our team reviews your information within 24 hours</li>
                     <li>You'll receive your project timeline and start date</li>
-                    <li>Design and development begins (2 weeks)</li>
+                    <li>Design and development takes (2 weeks)</li>
                     <li>You get your custom LawBot 360!</li>
                 </ol>
                 
