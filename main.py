@@ -100,7 +100,29 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
     conv = conversations[call_sid]
     conv["history"].append({"role": "user", "content": user_input})
     
-    # If we JUST switched to onboarding, provide Step 1 directly without regenerating
+    # CRITICAL: Always check for pricing questions FIRST, even if just switched phases
+    user_input_lower = user_input.lower()
+    pricing_keywords = ['price', 'cost', 'how much', 'expensive', 'pay', 'payment', 'total']
+    is_pricing_question = any(keyword in user_input_lower for keyword in pricing_keywords)
+    
+    if is_pricing_question:
+        # User is asking about price - ALWAYS answer this, regardless of phase or state
+        pricing_response = "LawBot 360 has a base price of $25,000, plus you can choose from several add-ons and an optional monthly maintenance plan that would increase the total price based on what you need."
+        
+        # Clear just_switched flag if set (user asked about price instead of proceeding)
+        if conv.get("just_switched"):
+            conv["just_switched"] = False
+        
+        # Add to history
+        conv["history"].append({"role": "assistant", "content": pricing_response})
+        
+        # Add context based on phase
+        if conv["phase"] == "ONBOARDING":
+            return pricing_response + " You'll see all the specific options and costs in the portal. Have you opened 4dgaming.games/client-portal.html yet?"
+        else:  # SALES
+            return pricing_response + " Most firms find it pays for itself within months. Does the concept make sense for your practice?"
+    
+    # If we JUST switched to onboarding (and NOT asking about price), provide Step 1 directly
     if conv.get("just_switched"):
         conv["just_switched"] = False  # Clear flag
         step1_message = "Perfect! Open your browser and go to 4dgaming.games/client-portal.html. Tell me when you have it open."
@@ -298,11 +320,32 @@ WHEN FIRST ENTERING ONBOARDING (user just committed):
 - Do NOT hesitate or wait - start Step 1 immediately
 
 ONBOARDING RULES:
-1. Be PATIENT and FRIENDLY - guide them gently
-2. ONE step at a time - wait for confirmation
-3. Keep responses SHORT (1-2 sentences)
-4. Answer questions about features thoroughly
-5. Let THEM discover pricing in the portal (don't mention it)
+1. ⚠️ **PRICING TRANSPARENCY IS CRITICAL** - When user asks ANYTHING about price/cost/money:
+   
+   ALWAYS respond IMMEDIATELY with this EXACT framework:
+   "LawBot 360 has a base price of $25,000, plus you can choose from several add-ons and an optional monthly maintenance plan. [Then answer their specific question and/or guide back to portal]"
+   
+   EXAMPLES:
+   Q: "What's the price of the system?"
+   A: "LawBot 360 has a base price of $25,000, plus you can choose from several add-ons and an optional monthly maintenance plan. You'll see all the specific options and costs as we go through the portal setup. Now, have you opened 4dgaming.games/client-portal.html yet?"
+   
+   Q: "How much does this cost?"
+   A: "The base system is $25,000 with customizable add-ons available. Let me walk you through the portal where you can see all the options. Have you got the portal open?"
+   
+   Q: "What's the total price?"
+   A: "LawBot 360 starts at $25,000 for the base system, and you can add optional features and maintenance plans that increase the price based on what you need. You'll see the exact total in the portal once you select your options. Let's get you into the portal - do you have it open?"
+   
+   NEVER say these vague phrases:
+   - ❌ "Pricing will be available once you're in the portal"
+   - ❌ "You'll see costs when you configure"
+   - ❌ "Details will be visible once logged in"
+   
+   ALWAYS include "$25,000" or "$25k" in your response to pricing questions!
+
+2. Be PATIENT and FRIENDLY - guide them gently
+3. ONE step at a time - wait for confirmation
+4. Keep responses SHORT (1-2 sentences) unless answering a pricing question
+5. Answer questions about features thoroughly
 6. If they ask about add-on features, explain the benefits
 
 ONBOARDING STEPS:
