@@ -494,7 +494,7 @@ async def handle_inbound_call(request: Request):
         num_digits=1,
         action="/voice/handle-choice",
         method="POST",
-        timeout=7
+        timeout=3
     )
     response.append(gather)
     
@@ -609,7 +609,7 @@ async def handle_choice(request: Request):
             action='/voice/conversation',
             method='POST',
             speech_timeout='auto',
-            timeout=7
+            timeout=5
         )
         response.append(gather)
         
@@ -621,7 +621,7 @@ async def handle_choice(request: Request):
             input='speech',
             action='/voice/conversation',
             method='POST',
-            timeout=7
+            timeout=5
         )
         response.append(gather2)
         
@@ -725,7 +725,7 @@ async def conversation(request: Request):
             action='/voice/conversation',
             method='POST',
             speech_timeout='auto',
-            timeout=7,
+            timeout=5,
             finish_on_key='#'
         )
         response.append(gather)
@@ -737,7 +737,7 @@ async def conversation(request: Request):
             input='speech',
             action='/voice/conversation',
             method='POST',
-            timeout=7
+            timeout=5
         )
         response.append(gather2)
         
@@ -748,7 +748,7 @@ async def conversation(request: Request):
             input='speech',
             action='/voice/conversation',
             method='POST',
-            timeout=7
+            timeout=5
         )
         response.append(gather3)
         
@@ -838,7 +838,7 @@ async def fallback_choice(request: Request):
             input='speech',
             action='/voice/conversation',
             method='POST',
-            timeout=7
+            timeout=5
         )
         response.append(gather)
         
