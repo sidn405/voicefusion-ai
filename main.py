@@ -112,12 +112,20 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
     user_input_clean = user_input.lower().strip().rstrip('.,!?;')
     
     # Affirmative responses that indicate interest
-    affirmative_responses = ['yes', 'yeah', 'yep', 'yup', 'sure', 'okay', 'ok', 'definitely',
-                            'absolutely', 'let\'s do it', 'i\'m interested', 'sounds good', 
-                            'that works', 'i\'d like that', 'i want it', 'let\'s get started']
+    affirmative_starts = ['yes', 'yeah', 'yep', 'yup', 'sure', 'okay', 'ok', 'definitely',
+                         'absolutely']
+    affirmative_phrases = ['let\'s do it', 'i\'m interested', 'sounds good', 
+                          'that works', 'i\'d like that', 'i want it', 'let\'s get started',
+                          'that sounds good', 'that would be great']
+    
+    # Check if user input starts with or contains affirmative
+    user_is_affirmative = (
+        any(user_input_clean.startswith(aff) for aff in affirmative_starts) or
+        any(phrase in user_input_clean for phrase in affirmative_phrases)
+    )
     
     # Check if we should switch from SALES to ONBOARDING phase
-    if conv["phase"] == "SALES" and user_input_clean in affirmative_responses:
+    if conv["phase"] == "SALES" and user_is_affirmative:
         # User gave a clear affirmative response
         
         # Get last 2 bot messages to check what kind of question was asked
@@ -132,6 +140,8 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
             'would that help',
             'sound like it would help',
             'make sense for your',
+            'does the concept make sense',  # Added
+            'concept make sense',  # Added
             'ready to',
             'want to get started',
             'shall we get',
@@ -143,7 +153,9 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
             'let\'s get you set up',  # Strong closing phrase
             'let\'s get started',
             'start capturing those leads',
-            'get you set up'
+            'get you set up',
+            'be significant',  # Added - "that would be significant, right?"
+            'be beneficial'  # Added - "would that be beneficial?"
         ]
         
         # DISCOVERY QUESTIONS - These are just gathering info, NOT asking for commitment
@@ -201,11 +213,18 @@ YOUR GOAL: Build interest and value, then transition to setup when they show int
 CRITICAL RULES:
 1. Be PROFESSIONAL and CONSULTATIVE - you're a trusted advisor, not pushy
 2. Keep responses SHORT (1-2 sentences max) - this is a phone call
-3. NEVER MENTION PRICING - they'll see it in the portal
-4. Focus on BENEFITS and ROI, not features
+3. Be TRANSPARENT about pricing when asked directly ($25k base + addons)
+4. Focus on BENEFITS and ROI, not just features
 5. Ask questions to understand their needs
-6. When they show interest → transition to setup
-7. Be warm, confident, and helpful
+6. When they show interest → IMMEDIATELY transition to setup (don't ask more questions!)
+7. NEVER mention "demo" or "trial" - they go straight to the portal to purchase
+8. Be warm, confident, and helpful
+
+AVOID:
+- ❌ Endless discovery questions - ask 2-3 max then close
+- ❌ Mentioning "demo", "trial", "test" - there is no demo
+- ❌ Asking "how do you see this fitting?" after they've already shown interest
+- ❌ Over-explaining features after they've committed
 
 PRODUCT: LawBot 360
 - 24/7 AI-powered client intake chatbot
@@ -222,6 +241,8 @@ CONSULTATIVE APPROACH:
 5. Value: "If you could capture even 2-3 more quality leads per month, that would be significant, right?"
 6. Trial close: "Does that sound like it would help your firm?"
 7. When they say YES → Transition: "Perfect! Let's get you set up right now so you can start capturing those leads."
+
+IMPORTANT: After trial close, if they show interest, IMMEDIATELY transition to setup. Don't ask more questions. Don't mention demos. Just say "Perfect! Let's get you set up right now."
 
 HANDLING SHORT RESPONSES:
 - If they say just "yes", "yeah", "sure", "okay" → ALWAYS respond positively and move forward
