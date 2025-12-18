@@ -451,7 +451,7 @@ async def handle_inbound_call(request: Request):
         num_digits=1,
         action="/voice/handle-choice",
         method="POST",
-        timeout=10
+        timeout=7
     )
     response.append(gather)
     
@@ -484,7 +484,7 @@ async def initiate_cold_call(request: Request):
     # Gather yes/no response
     gather = Gather(
         input='speech dtmf',
-        timeout=5,
+        timeout=3,
         action='/voice/cold-call-response',
         method='POST'
     )
@@ -566,7 +566,7 @@ async def handle_choice(request: Request):
             action='/voice/conversation',
             method='POST',
             speech_timeout='auto',
-            timeout=10
+            timeout=7
         )
         response.append(gather)
         
@@ -578,7 +578,7 @@ async def handle_choice(request: Request):
             input='speech',
             action='/voice/conversation',
             method='POST',
-            timeout=10
+            timeout=7
         )
         response.append(gather2)
         
@@ -682,7 +682,7 @@ async def conversation(request: Request):
             action='/voice/conversation',
             method='POST',
             speech_timeout='auto',
-            timeout=10,
+            timeout=7,
             finish_on_key='#'
         )
         response.append(gather)
@@ -694,7 +694,7 @@ async def conversation(request: Request):
             input='speech',
             action='/voice/conversation',
             method='POST',
-            timeout=10
+            timeout=7
         )
         response.append(gather2)
         
@@ -705,7 +705,7 @@ async def conversation(request: Request):
             input='speech',
             action='/voice/conversation',
             method='POST',
-            timeout=10
+            timeout=7
         )
         response.append(gather3)
         
@@ -795,7 +795,7 @@ async def fallback_choice(request: Request):
             input='speech',
             action='/voice/conversation',
             method='POST',
-            timeout=10
+            timeout=7
         )
         response.append(gather)
         
