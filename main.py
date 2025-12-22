@@ -694,7 +694,7 @@ async def handle_cold_call_response(request: Request):
         gather = Gather(
             num_digits=1,
             action='/voice/cold-call-response',
-            timeout=5
+            timeout=3
         )
         response.append(gather)
     
@@ -779,10 +779,22 @@ async def conversation(request: Request):
     digits = form_data.get('Digits', '')
     from_number = form_data.get('From')
     
+    # DEBUG: Log what we received
+    print(f"📥 Received - SpeechResult: '{speech_result}', Digits: '{digits}'")
+    
     response = VoiceResponse()
     
     # Check for human transfer request (user says "human" or presses *)
-    if '*' in digits or any(word in speech_result.lower() for word in ['human', 'person', 'representative', 'transfer']):
+    # Only check if we actually have speech input
+    transfer_triggers = ['human', 'person', 'representative', 'transfer']
+    has_trigger_word = bool(speech_result) and any(word in speech_result.lower() for word in transfer_triggers)
+    has_star = '*' in digits
+    
+    print(f"🔍 Transfer check - Has trigger word: {has_trigger_word}, Has *: {has_star}, Speech: '{speech_result}'")
+    if has_trigger_word:
+        print(f"   ⚠️ Trigger word found in: '{speech_result}'")
+    
+    if has_star or has_trigger_word:
         response.say("Of course, let me transfer you to a specialist now.", voice=VOICE)
         notify_human_transfer(from_number, call_sid, "User requested transfer during conversation")
         transfer_to_human(response, "User requested")
@@ -891,10 +903,12 @@ async def conversation(request: Request):
             action='/voice/conversation',
             method='POST',
             speech_timeout='auto',
-            timeout=3,
+            timeout=3,  # Give users 5 seconds to start speaking
             finish_on_key='#'
         )
         response.append(gather)
+        
+        print(f"✅ Added first gather to response - waiting for user speech")
         
         # If no response after first gather, prompt them
         response.say("Are you still there?", voice=VOICE)
@@ -936,7 +950,8 @@ async def conversation(request: Request):
         
     else:
         # No speech detected at all
-        print("⚠️ No speech result received")
+        print(f"⚠️ No speech result received - SpeechResult: '{speech_result}', Digits: '{digits}'")
+        print(f"🔍 This should only happen if gather timed out with no speech")
         response.say("I'm sorry, I didn't hear anything. Let me connect you with a human specialist.", voice=VOICE)
         notify_human_transfer(from_number, call_sid, "No speech detected")
         transfer_to_human(response, "Transfer needed")

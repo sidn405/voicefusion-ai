@@ -38,7 +38,7 @@ if HUMAN_PHONE:
 else:
     print("❌ WARNING: PHONE environment variable not set! Transfers will fail.")
     print("   Set in Railway: PHONE=+15043833692")
-SERVER_URL = os.getenv("SERVER_URL", "https://your-app.railway.app")
+SERVER_URL = os.getenv("SERVER_URL", "https://voicefusion-ai-production.up.railway.app")
 
 # Conversation memory
 conversations = {}
@@ -100,6 +100,38 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
     conv = conversations[call_sid]
     conv["history"].append({"role": "user", "content": user_input})
     
+    # CRITICAL: Detect if user is stuck in a statement loop (saying yes/okay to vague statements)
+    if conv["phase"] == "SALES" and len(conv["history"]) > 6:
+        # Check if bot has been making vague commitment statements
+        recent_bot_messages = [msg.get('content', '').lower() for msg in conv["history"][-6:] 
+                              if msg.get('role') == 'assistant']
+        statement_indicators = ['let me show you', 'i\'ll get you started', 'we\'ll move forward',
+                               'i\'ll guide you', 'let\'s get started', 'i\'ll gather', 'welcome aboard',
+                               'you\'re on your way', 'we\'re all set']
+        
+        has_vague_statements = sum(1 for msg in recent_bot_messages 
+                                   if any(indicator in msg for indicator in statement_indicators))
+        
+        # If bot made 3+ vague statements and user keeps saying yes/okay, switch to onboarding NOW
+        if has_vague_statements >= 3:
+            recent_user_msgs = [msg.get('content', '').lower().strip() for msg in conv["history"][-4:] 
+                               if msg.get('role') == 'user']
+            user_agreeing = sum(1 for msg in recent_user_msgs 
+                               if msg in ['yes', 'okay', 'ok', 'sure', 'yeah', 'yep', 'yes.', 'okay.', 'ok.'])
+            
+            if user_agreeing >= 2:
+                print(f"⚠️ DETECTED STATEMENT LOOP - Forcing switch to ONBOARDING")
+                print(f"   Bot made {has_vague_statements} vague statements")
+                print(f"   User said yes/okay {user_agreeing} times")
+                conv["committed"] = True
+                conv["phase"] = "ONBOARDING"
+                conv["current_step"] = 1
+                conv["just_switched"] = True
+                # Return portal instruction immediately
+                step1_message = "Perfect! Open your browser and go to 4 d gaming dot games slash client dash portal dot html. Tell me when you have it open."
+                conv["history"].append({"role": "assistant", "content": step1_message})
+                return step1_message
+    
     # CRITICAL: Always check for pricing questions FIRST, even if just switched phases
     user_input_lower = user_input.lower()
     pricing_keywords = ['price', 'cost', 'how much', 'expensive', 'pay', 'payment', 'total']
@@ -118,14 +150,14 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
         
         # Add context based on phase
         if conv["phase"] == "ONBOARDING":
-            return pricing_response + " You'll see all the specific options and costs in the portal. Have you opened 4dgaming.games/client-portal.html yet?"
+            return pricing_response + " You'll see all the specific options and costs in the portal. Have you opened 4 d gaming dot games slash client dash portal dot html yet?"
         else:  # SALES
             return pricing_response + " Most firms find it pays for itself within months. Does the concept make sense for your practice?"
     
     # If we JUST switched to onboarding (and NOT asking about price), provide Step 1 directly
     if conv.get("just_switched"):
         conv["just_switched"] = False  # Clear flag
-        step1_message = "Perfect! Open your browser and go to 4dgaming.games/client-portal.html. Tell me when you have it open."
+        step1_message = "Perfect! Open your browser and go to 4 d gaming dot games slash client dash portal dot html. Tell me when you have it open."
         conv["history"].append({"role": "assistant", "content": step1_message})
         return step1_message
     
@@ -146,8 +178,14 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
         any(phrase in user_input_clean for phrase in affirmative_phrases)
     )
     
+    # Check for negative responses (don't switch on these)
+    negative_responses = ['no', 'nope', 'not yet', 'not ready', 'not now', 'not sure', 
+                         'i don\'t think', 'maybe later', 'need to think']
+    user_is_negative = any(user_input_clean.startswith(neg) or neg in user_input_clean 
+                          for neg in negative_responses)
+    
     # Check if we should switch from SALES to ONBOARDING phase
-    if conv["phase"] == "SALES" and user_is_affirmative:
+    if conv["phase"] == "SALES" and user_is_affirmative and not user_is_negative:
         # User gave a clear affirmative response
         
         # Get last 2 bot messages to check what kind of question was asked
@@ -165,6 +203,9 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
             'does the concept make sense',  # Added
             'concept make sense',  # Added
             'ready to',
+            'are you ready to get set up',  # ACTION CLOSE
+            'ready to get set up',  # ACTION CLOSE
+            'ready to get started',  # ACTION CLOSE
             'want to get started',
             'shall we get',
             'would you like',
@@ -241,30 +282,105 @@ CRITICAL RULES:
 6. When they show interest → IMMEDIATELY transition to setup (don't ask more questions!)
 7. NEVER mention "demo" or "trial" - they go straight to the portal to purchase
 8. Be warm, confident, and helpful
+9. ⚠️ NEVER make statements that wait for a response - either ask a QUESTION with "?" or give information and move on
 
 AVOID:
-- ❌ Endless discovery questions - ask 2-3 max then close
+- ❌ Rushing through discovery - ask 3-4 questions minimum to understand their needs
+- ❌ Skipping practice area questions - this is critical for customization!
+- ❌ Just saying "24/7 chatbot" - explain the FULL system (intake, triage, documents, integrations, branding)
+- ❌ Moving to action close without explaining what they get
 - ❌ Mentioning "demo", "trial", "test" - there is no demo
-- ❌ Asking "how do you see this fitting?" after they've already shown interest
-- ❌ Over-explaining features after they've committed
+- ❌ Making statements like "Let me show you..." after commitment - give portal URL immediately
 
 PRODUCT: LawBot 360
-- 24/7 AI-powered client intake chatbot
-- Automatic lead qualification and consultation scheduling
-- Integrates with Clio, Salesforce, MyCase
-- Customizable for any practice area
-- Proven to increase client intake by 40%
+
+LawBot 360 is a fully custom AI intake and engagement system built specifically for law firms. 
+
+WHAT IT DOES:
+- Handles new client intake 24/7
+- Triages their legal issue intelligently
+- Asks case-specific questions based on practice area
+- Schedules consultations automatically
+- Captures documents from clients
+- Verifies medical treatment (for personal injury cases)
+- Stores everything securely with encryption
+
+INTEGRATIONS:
+- Integrates with your website seamlessly
+- Connects to your CRM or case management software (Clio, Salesforce, MyCase, etc.)
+- Syncs with your scheduling tools
+- Works across multiple channels (website, SMS, WhatsApp)
+
+CUSTOMIZATION:
+- Everything is branded to your firm
+- Your colors, logo, language, tone
+- Custom disclaimers and legal language
+- Tailored to your specific practice areas
+- Multi-location support available
+
+RESULTS:
+- 40% increase in client consultations
+- 24/7 lead capture with zero missed opportunities
+- Qualified leads with complete intake information
+- Reduced staff workload on routine intake
 
 CONSULTATIVE APPROACH:
-1. Opening: "Great! I'm here to help. Quick question - are you currently losing leads when your office is closed?"
-2. Discovery: Ask about their current intake process (ONE question at a time)
-3. Pain points: Listen and identify what's not working
-4. Solution: "LawBot 360 handles that 24/7 - our clients see 40% more consultations"
-5. Value: "If you could capture even 2-3 more quality leads per month, that would be significant, right?"
-6. Trial close: "Does that sound like it would help your firm?"
-7. When they say YES → Transition: "Perfect! Let's get you set up right now so you can start capturing those leads."
+1. Opening: "Great! I'm here to help. Before we begin, may I have your name and the name of your firm?"
 
-IMPORTANT: After trial close, if they show interest, IMMEDIATELY transition to setup. Don't ask more questions. Don't mention demos. Just say "Perfect! Let's get you set up right now."
+2. After getting name/firm: "Thanks [Name]! So, quick question - are you currently losing leads when your office is closed?"
+
+3. Discovery (ask 3-4 questions, ONE at a time):
+   - "How are you currently handling client intake after hours?"
+   - "What practice areas do you focus on?" (Important for customization!)
+   - "What's your biggest challenge with your current intake process?"
+   - "Are you using any CRM or case management software like Clio or Salesforce?"
+
+4. Pain points: Listen and identify what's not working. Dig deeper with follow-ups if needed.
+
+5. Solution - Explain features based on their needs (don't rush this!):
+   - Start with overview: "LawBot 360 is a fully custom AI intake and engagement system built specifically for law firms"
+   - Explain what it does: "It handles new client intake 24/7, triages their legal issue, asks case-specific questions for [their practice area], schedules consultations, captures documents, and even verifies medical treatment for injury cases"
+   - Explain integrations: "It integrates seamlessly with your website, and if you're using [their CRM], it syncs directly with that too"
+   - Explain customization: "Everything is branded to your firm - your colors, logo, language, tone, even your legal disclaimers. The entire experience is yours"
+   
+6. Social proof: "Our law firm clients see 40% more consultations because they never miss a lead, and every lead comes in fully qualified with complete intake information"
+
+7. Value question: "If you could capture even 2-3 more quality leads per month with all their intake information already collected, that would be significant, right?"
+
+8. Trial close: "Does this sound like something that would help your firm?"
+
+9. If YES to trial close, explain what they get: "Here's what you get: a fully custom system tailored to [their practice areas], integrated with [their tools if mentioned], completely branded to your firm. The setup includes all the case-specific questions for your practice, document capture capability, and everything stores securely."
+
+10. Action close: "Are you ready to get set up right now so you can start capturing those leads?"
+    - If YES → IMMEDIATELY give portal URL: "Perfect! Open your browser and go to 4 d gaming dot games slash client dash portal dot html. Tell me when you have it open."
+    - If NO or hesitation → Ask: "What's holding you back?" Then address objection and re-close
+
+⚠️⚠️⚠️ CRITICAL - PROPER DISCOVERY & VALUE BUILDING:
+- ASK 3-4 DISCOVERY QUESTIONS before explaining features (don't rush!)
+- LISTEN to their practice areas - ask follow-up questions if interesting
+- EXPLAIN the full system capabilities (intake, triage, case-specific questions, scheduling, documents, integrations, branding)
+- Don't just say "24/7 chatbot" - explain it's a complete custom intake and engagement system
+- BUILD VALUE by explaining how it's tailored to them
+- Take your time! Don't rush to close - make sure they understand what they're getting
+
+⚠️⚠️⚠️ CRITICAL - AVOID STATEMENT LOOPS:
+After commitment (YES to action close), DO NOT say:
+- ❌ "Let me show you..."
+- ❌ "I'll get you started..."
+- ❌ "We'll move forward..."
+
+Instead, IMMEDIATELY give portal URL!
+
+OBJECTION HANDLING AFTER ACTION CLOSE:
+If they hesitate or say no, USE THEIR PAIN POINTS to close:
+- Hesitation about cost → "Remember you said you're losing leads after hours - even capturing just 2 extra cases a month pays for itself"
+- Need to think about it → "I understand. What specifically do you need to think about? Let's address that now"
+- Need approval → "That makes sense. Who else needs to be involved in this decision?"
+- Timing concerns → "When would be a good time? The sooner we get this set up, the sooner you stop losing those leads you mentioned"
+
+After addressing objection, RE-ASK the action close: "So are you ready to get started?"
+
+IMPORTANT: The action close ("Are you ready to get set up?") is DIFFERENT from the trial close ("Does that sound helpful?"). Trial close = gauging interest. Action close = asking for commitment. If they say NO to action close, find out WHY and overcome it.
 
 HANDLING SHORT RESPONSES:
 - If they say just "yes", "yeah", "sure", "okay" → ALWAYS respond positively and move forward
@@ -315,7 +431,7 @@ CRITICAL: If user just said "yes" or showed interest, START IMMEDIATELY with Ste
 Don't ask if they're ready - they already said yes! Just begin the onboarding.
 
 WHEN FIRST ENTERING ONBOARDING (user just committed):
-- Immediately respond with: "Perfect! Let's get you set up right now. Open your browser and go to 4dgaming.games/client-portal.html. Tell me when you have it open."
+- Immediately respond with: "Perfect! Let's get you set up right now. Open your browser and go to 4 d gaming dot games slash client dash portal dot html. Tell me when you have it open."
 - Do NOT ask "Are you ready?" or "Shall we begin?" - they already committed!
 - Do NOT hesitate or wait - start Step 1 immediately
 
@@ -327,7 +443,7 @@ ONBOARDING RULES:
    
    EXAMPLES:
    Q: "What's the price of the system?"
-   A: "LawBot 360 has a base price of $25,000, plus you can choose from several add-ons and an optional monthly maintenance plan. You'll see all the specific options and costs as we go through the portal setup. Now, have you opened 4dgaming.games/client-portal.html yet?"
+   A: "LawBot 360 has a base price of $25,000, plus you can choose from several add-ons and an optional monthly maintenance plan. You'll see all the specific options and costs as we go through the portal setup. Now, have you opened 4 d gaming dot games slash client dash portal dot html yet?"
    
    Q: "How much does this cost?"
    A: "The base system is $25,000 with customizable add-ons available. Let me walk you through the portal where you can see all the options. Have you got the portal open?"
@@ -350,7 +466,7 @@ ONBOARDING RULES:
 
 ONBOARDING STEPS:
 
-STEP 1: "Perfect! Let's get you set up right now. Open your browser and go to 4dgaming.games/client-portal.html. Tell me when you have it open."
+STEP 1: "Perfect! Let's get you set up right now. Open your browser and go to 4 d gaming dot games slash client dash portal dot html. Tell me when you have it open."
 
 STEP 2: "Great! Now create your account or log in if you have one. Let me know when you're in."
 
@@ -373,7 +489,7 @@ Would you like any of these add-ons? If you're not sure, you can skip them."
 STEP 8: "Perfect! Now choose a Monthly Maintenance Plan:
 - Basic: Hosting, security updates, bug fixes, email support
 - Professional: Everything in Basic plus priority support and monthly feature updates  
-- Premium: Everything plus 24/7 support and custom feature development
+- Enterprise: Everything plus 24/7 support and custom feature development
 Or you can select 'No Maintenance Plan' if you prefer to handle it yourself.
 Which makes sense for your firm?"
 
@@ -383,14 +499,14 @@ STEP 10: "Great! Look at the right side of your screen for the project summary. 
 
 STEP 11: "Perfect! If you have any files to upload or messages to add, you can click 'Browse'. Otherwise, we can move to payment. Ready to continue?"
 
-STEP 12: "Excellent! You'll see the 'Fund Milestone 1' button with your total amount. Click it and you'll be taken to our secure Stripe payment page. The total includes everything you selected. Let me know when you're on the payment page."
+STEP 12: "Excellent! You'll see the 'Fund Milestone 1' button with your total amount. Click it and you'll be taken to our secure Stripe payment page. The payment includes everything you selected. Let me know when you're on the payment page."
 
 STEP 13: "Take your time completing the payment. I'm right here if you have questions. Let me know when it's done."
 
 STEP 14: "Congratulations! Your payment is complete. Here's what happens next:
 - Our team reviews your project within 24 hours
 - You'll receive your project timeline and start date  
-- Setup takes 2-3 weeks
+- Setup takes 2 weeks
 - You'll receive the integration form via email shortly
 
 Do you have any questions about the process or your new LawBot 360 system?"
@@ -418,7 +534,7 @@ Remember: Be PATIENT, HELPFUL, ONE STEP AT A TIME. They'll see pricing in the po
         # Track onboarding step progression
         if conv["phase"] == "ONBOARDING":
             response_lower = ai_response.lower()
-            if "4dgaming.games/client-portal" in response_lower:
+            if "4 d gaming dot games slash client dash portal dot html" in response_lower:
                 conv["current_step"] = 1
             elif "create your account" in response_lower or "log in" in response_lower:
                 conv["current_step"] = 2
@@ -494,7 +610,7 @@ async def handle_inbound_call(request: Request):
         num_digits=1,
         action="/voice/handle-choice",
         method="POST",
-        timeout=10
+        timeout=3
     )
     response.append(gather)
     
@@ -527,7 +643,7 @@ async def initiate_cold_call(request: Request):
     # Gather yes/no response
     gather = Gather(
         input='speech dtmf',
-        timeout=5,
+        timeout=3,
         action='/voice/cold-call-response',
         method='POST'
     )
@@ -578,7 +694,7 @@ async def handle_cold_call_response(request: Request):
         gather = Gather(
             num_digits=1,
             action='/voice/cold-call-response',
-            timeout=5
+            timeout=3
         )
         response.append(gather)
     
@@ -609,7 +725,7 @@ async def handle_choice(request: Request):
             action='/voice/conversation',
             method='POST',
             speech_timeout='auto',
-            timeout=10
+            timeout=3
         )
         response.append(gather)
         
@@ -621,12 +737,12 @@ async def handle_choice(request: Request):
             input='speech',
             action='/voice/conversation',
             method='POST',
-            timeout=10
+            timeout=3
         )
         response.append(gather2)
         
-        # If still no response after 2 gathers, add transfer to TwiML
-        # (only executes if both gathers timeout)
+        # Still no response - transfer
+        # NEW (FIXED):
         response.say("Let me connect you with someone who can help.", voice=VOICE)
         try:
             response.dial(
@@ -636,7 +752,6 @@ async def handle_choice(request: Request):
                 method='POST'
             )
         except Exception as e:
-            print(f"❌ Error adding dial: {e}")
             response.say("Please call us directly at 504-383-3692.", voice=VOICE)
         
     elif choice == '2':
@@ -664,10 +779,22 @@ async def conversation(request: Request):
     digits = form_data.get('Digits', '')
     from_number = form_data.get('From')
     
+    # DEBUG: Log what we received
+    print(f"📥 Received - SpeechResult: '{speech_result}', Digits: '{digits}'")
+    
     response = VoiceResponse()
     
     # Check for human transfer request (user says "human" or presses *)
-    if '*' in digits or any(word in speech_result.lower() for word in ['human', 'person', 'representative', 'transfer']):
+    # Only check if we actually have speech input
+    transfer_triggers = ['human', 'person', 'representative', 'transfer']
+    has_trigger_word = bool(speech_result) and any(word in speech_result.lower() for word in transfer_triggers)
+    has_star = '*' in digits
+    
+    print(f"🔍 Transfer check - Has trigger word: {has_trigger_word}, Has *: {has_star}, Speech: '{speech_result}'")
+    if has_trigger_word:
+        print(f"   ⚠️ Trigger word found in: '{speech_result}'")
+    
+    if has_star or has_trigger_word:
         response.say("Of course, let me transfer you to a specialist now.", voice=VOICE)
         notify_human_transfer(from_number, call_sid, "User requested transfer during conversation")
         transfer_to_human(response, "User requested")
@@ -681,6 +808,56 @@ async def conversation(request: Request):
         # Capture phone number (caller's number)
         if call_sid in conversations:
             conversations[call_sid]["phone_number"] = from_number
+        
+        # Extract name and firm from the response
+        # Look for patterns like "My name is X" or "I'm X from Y Law"
+        if call_sid in conversations:
+            conv = conversations[call_sid]
+            speech_lower = speech_result.lower()
+            
+            # Try to extract name if not yet captured
+            if not conv.get("client_name"):
+                # Look for "my name is X" or "I'm X" or "this is X"
+                if "my name is" in speech_lower:
+                    # Extract text after "my name is"
+                    name_part = speech_result.split("my name is", 1)[-1].split("and")[0].split("from")[0].strip(" ,.")
+                    if name_part and len(name_part.split()) <= 4:  # Reasonable name length
+                        conv["client_name"] = name_part
+                        print(f"👤 Name captured: {name_part}")
+                elif "i'm" in speech_lower or "i am" in speech_lower:
+                    # Extract after "I'm" or "I am"
+                    for trigger in ["i'm", "i am"]:
+                        if trigger in speech_lower:
+                            name_part = speech_result.split(trigger, 1)[-1].split("and")[0].split("from")[0].split("with")[0].strip(" ,.")
+                            if name_part and len(name_part.split()) <= 4:
+                                conv["client_name"] = name_part
+                                print(f"👤 Name captured: {name_part}")
+                                break
+                elif "this is" in speech_lower:
+                    name_part = speech_result.split("this is", 1)[-1].split("and")[0].split("from")[0].split("with")[0].strip(" ,.")
+                    if name_part and len(name_part.split()) <= 4:
+                        conv["client_name"] = name_part
+                        print(f"👤 Name captured: {name_part}")
+            
+            # Try to extract firm name if not yet captured
+            if not conv.get("firm_name"):
+                # Look for "from X" or "at X" or "with X"
+                for trigger in ["from", "at", "with"]:
+                    if f" {trigger} " in speech_lower:
+                        firm_part = speech_result.split(f" {trigger} ", 1)[-1].strip(" ,.")
+                        # If it contains "law" or "firm" or "attorney" or "legal", likely a firm name
+                        if any(word in firm_part.lower() for word in ["law", "firm", "attorney", "legal", "associates"]):
+                            conv["firm_name"] = firm_part
+                            print(f"🏢 Firm name captured: {firm_part}")
+                            break
+                
+                # Also check for standalone mentions of law firms
+                if not conv.get("firm_name"):
+                    if any(word in speech_lower for word in ["law", "attorney", "legal"]):
+                        # The whole response might be the firm name
+                        if len(speech_result.split()) <= 6:  # Reasonable firm name length
+                            conv["firm_name"] = speech_result.strip(" ,.")
+                            print(f"🏢 Firm name captured: {speech_result.strip(' ,.')}")
         
         # Check if user provided email address
         if "@" in speech_result and "." in speech_result:
@@ -726,10 +903,12 @@ async def conversation(request: Request):
             action='/voice/conversation',
             method='POST',
             speech_timeout='auto',
-            timeout=15,
+            timeout=3,  # Give users 5 seconds to start speaking
             finish_on_key='#'
         )
         response.append(gather)
+        
+        print(f"✅ Added first gather to response - waiting for user speech")
         
         # If no response after first gather, prompt them
         response.say("Are you still there?", voice=VOICE)
@@ -738,7 +917,7 @@ async def conversation(request: Request):
             input='speech',
             action='/voice/conversation',
             method='POST',
-            timeout=15
+            timeout=3
         )
         response.append(gather2)
         
@@ -749,7 +928,7 @@ async def conversation(request: Request):
             input='speech',
             action='/voice/conversation',
             method='POST',
-            timeout=15
+            timeout=3
         )
         response.append(gather3)
         
@@ -771,7 +950,8 @@ async def conversation(request: Request):
         
     else:
         # No speech detected at all
-        print("⚠️ No speech result received")
+        print(f"⚠️ No speech result received - SpeechResult: '{speech_result}', Digits: '{digits}'")
+        print(f"🔍 This should only happen if gather timed out with no speech")
         response.say("I'm sorry, I didn't hear anything. Let me connect you with a human specialist.", voice=VOICE)
         notify_human_transfer(from_number, call_sid, "No speech detected")
         transfer_to_human(response, "Transfer needed")
@@ -839,7 +1019,7 @@ async def fallback_choice(request: Request):
             input='speech',
             action='/voice/conversation',
             method='POST',
-            timeout=10
+            timeout=3
         )
         response.append(gather)
         
@@ -995,7 +1175,7 @@ def send_integration_form_email(client_email: str, client_name: str, firm_name: 
                     <li>Complete the integration form (takes ~10 minutes)</li>
                     <li>Our team reviews your information within 24 hours</li>
                     <li>You'll receive your project timeline and start date</li>
-                    <li>Design and development begins (2-3 weeks)</li>
+                    <li>Design and development takes (2 weeks)</li>
                     <li>You get your custom LawBot 360!</li>
                 </ol>
                 
@@ -1180,7 +1360,7 @@ def notify_human_transfer(from_number: str, call_sid: str, reason: str):
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8000))
+    port = int(os.getenv("PORT", 8080))
     print("=" * 70)
     print("🤖 LawBot 360 Voice Sales Agent")
     print("=" * 70)
