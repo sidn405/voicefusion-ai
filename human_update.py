@@ -354,7 +354,7 @@ CONSULTATIVE APPROACH:
 
 5. Solution - Explain features based on their needs (don't rush this!):
    - Start with overview: "LawBot 360 is a fully custom AI intake and engagement system built specifically for law firms"
-   - Explain what it does: "It handles new client intake 24/7, triages their legal issue, asks case-specific questions for [their practice area], schedules consultations, captures documents, and even verifies medical treatment for injury cases"
+   - Explain what it does: "It handles new client intake 24/7, triages their legal issue, asks case-specific questions for [their practice area], schedules consultations, captures documents, verifies medical treatment for injury cases, and even accepts payments from clients directly through the chat"
    - Explain integrations: "It integrates seamlessly with your website, and if you're using [their CRM], it syncs directly with that too"
    - Explain customization: "Everything is branded to your firm - your colors, logo, language, tone, even your legal disclaimers. The entire experience is yours"
    - ALWAYS end with confirmation question: "Does that sound helpful for your firm?"
