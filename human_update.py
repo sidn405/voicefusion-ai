@@ -4,7 +4,7 @@ Uses Twilio's built-in voices (Amazon Polly) - Professional quality, zero issues
 """
 
 from fastapi import FastAPI, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, HTMLResponse
 from twilio.twiml.voice_response import VoiceResponse, Gather
 from twilio.rest import Client
 import os
@@ -39,6 +39,14 @@ else:
     print("❌ WARNING: PHONE environment variable not set! Transfers will fail.")
     print("   Set in Railway: PHONE=+15043833692")
 SERVER_URL = os.getenv("SERVER_URL", "https://voicefusion-ai-production.up.railway.app")
+
+# Twilio phone number for outbound calls
+TWILIO_PHONE = os.getenv("TWILIO_PHONE_NUMBER")
+if TWILIO_PHONE:
+    print(f"✅ Twilio phone configured for outbound: {TWILIO_PHONE}")
+else:
+    print("⚠️  TWILIO_PHONE_NUMBER not set - outbound calling disabled")
+    print("   Set in Railway: TWILIO_PHONE_NUMBER=+12054134101")
 
 # Conversation memory
 conversations = {}
@@ -279,12 +287,40 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
             silence_context = "\n\nNOTE: User had brief silence but is now responding. Acknowledge naturally and continue conversation without making a big deal of it."
     
     if conv["phase"] == "SALES":
+        # Add cold call specific instructions if this is a discovery stage
+        cold_call_context = ""
+        if stage == "discovery":
+            cold_call_context = """
+⚠️⚠️⚠️ COLD CALL MODE - SPECIAL INSTRUCTIONS:
+This is a COLD CALL. The prospect just agreed to hear your pitch. DO NOT dump features immediately!
+
+COLD CALL STRUCTURE (CRITICAL):
+1. FIRST: Ask pain point questions (ONE at a time):
+   - "Are you currently losing leads when your office is closed after hours?"
+   - Wait for response, then: "How are you handling client intake outside business hours right now?"
+   - Then: "What practice areas do you focus on?"
+   
+2. ONLY AFTER 2-3 PAIN POINT QUESTIONS: Briefly explain solution
+   - Keep it short: "LawBot 360 is an AI system that handles intake 24/7, captures leads you're missing, and integrates with your existing tools"
+   - Ask: "Does that sound like it would help?"
+   
+3. Build value naturally through conversation, don't info dump
+
+CRITICAL FOR COLD CALLS:
+- Start with QUESTIONS, not features
+- Discover their pain points FIRST
+- Only explain features AFTER understanding their needs
+- Keep responses SHORT (1-2 sentences)
+- This is a discovery conversation, not a product presentation
+"""
+        
         system_prompt = f"""You are a professional sales representative for LawBot 360, an AI client intake system for law firms.
 
 Current stage: {stage}
 Client name: {conv.get('client_name', 'Unknown')}
 Firm: {conv.get('firm_name', 'Unknown')}
 Phase: SALES MODE - Building Value
+{cold_call_context}
 
 YOUR GOAL: Build interest and value, then transition to setup when they show interest
 
@@ -629,6 +665,330 @@ async def root():
         "tts": "twilio-native"
     }
 
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard():
+    """Serve the Cold Call Management Dashboard"""
+    return HTMLResponse(content="""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LawBot 360 - Cold Call Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { max-width: 800px; margin: 0 auto; }
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+        .header h1 { color: #667eea; font-size: 32px; margin-bottom: 10px; }
+        .header p { color: #666; font-size: 16px; }
+        .panel {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+        }
+        .form-group { margin-bottom: 20px; }
+        .form-group label {
+            display: block;
+            color: #555;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 15px;
+        }
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .btn {
+            padding: 14px 28px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            width: 100%;
+        }
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .alert {
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .alert-success { background: #d1fae5; color: #065f46; }
+        .alert-error { background: #fee2e2; color: #991b1b; }
+        .spinner {
+            border: 3px solid #f3f4f6;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            margin-right: 10px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📞 LawBot 360 Cold Call Dashboard</h1>
+            <p>Testing cold call functionality</p>
+        </div>
+
+        <div class="panel">
+            <h2 style="margin-bottom: 20px;">🎯 Make Test Call</h2>
+            
+            <div id="alert-container"></div>
+
+            <div class="form-group">
+                <label>Your Cell Phone Number (for testing)</label>
+                <input type="tel" id="phone-number" placeholder="+15551234567">
+            </div>
+
+            <div class="form-group">
+                <label>Test Prospect Name</label>
+                <input type="text" id="prospect-name" value="Test Prospect">
+            </div>
+
+            <div class="form-group">
+                <label>Test Firm Name</label>
+                <input type="text" id="firm-name" value="Test Law Firm">
+            </div>
+
+            <button class="btn btn-primary" id="make-call-btn" onclick="makeTestCall()">
+                📞 Call My Phone (Test)
+            </button>
+        </div>
+    </div>
+
+    <script>
+        async function makeTestCall() {
+            const phoneNumber = document.getElementById('phone-number').value.trim();
+            const prospectName = document.getElementById('prospect-name').value.trim();
+            const firmName = document.getElementById('firm-name').value.trim();
+
+            if (!phoneNumber) {
+                showAlert('Please enter your phone number', 'error');
+                return;
+            }
+
+            if (!phoneNumber.startsWith('+')) {
+                showAlert('Phone number must start with + (example: +15551234567)', 'error');
+                return;
+            }
+
+            const btn = document.getElementById('make-call-btn');
+            btn.disabled = true;
+            btn.innerHTML = '<div class="spinner"></div>Calling your phone...';
+
+            try {
+                const response = await fetch('/api/make-cold-call', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        to_number: phoneNumber,
+                        prospect_name: prospectName,
+                        firm_name: firmName
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    showAlert('✅ Call initiated! Your phone should ring in a few seconds. Answer to hear the AI bot.', 'success');
+                } else {
+                    showAlert('❌ Error: ' + result.message, 'error');
+                }
+            } catch (error) {
+                showAlert('❌ Failed: ' + error.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '📞 Call My Phone (Test)';
+            }
+        }
+
+        function showAlert(message, type) {
+            const container = document.getElementById('alert-container');
+            container.innerHTML = '<div class="alert alert-' + type + '">' + message + '</div>';
+            setTimeout(() => container.innerHTML = '', 5000);
+        }
+    </script>
+</body>
+</html>""")
+
+@app.post("/api/make-cold-call")
+async def make_cold_call(request: Request):
+    """API endpoint to initiate a cold call to a prospect"""
+    try:
+        data = await request.json()
+        to_number = data.get("to_number")
+        prospect_name = data.get("prospect_name", "")
+        firm_name = data.get("firm_name", "")
+        
+        if not to_number:
+            return {"status": "error", "message": "to_number is required"}
+        
+        if not to_number.startswith('+'):
+            return {"status": "error", "message": "Phone number must be in E.164 format (+15551234567)"}
+        
+        print("=" * 70)
+        print(f"📞 INITIATING COLD CALL")
+        print("=" * 70)
+        print(f"To: {to_number}")
+        print(f"Prospect: {prospect_name or 'Unknown'}")
+        print(f"Firm: {firm_name or 'Unknown'}")
+        print("=" * 70)
+        
+        twilio_phone = os.getenv("TWILIO_PHONE_NUMBER")
+        if not twilio_phone:
+            return {"status": "error", "message": "TWILIO_PHONE_NUMBER not configured"}
+        
+        call = twilio_client.calls.create(
+            to=to_number,
+            from_=twilio_phone,
+            url=f"{SERVER_URL}/voice/outbound/cold-call-start",
+            method="POST",
+            status_callback=f"{SERVER_URL}/voice/call-status",
+            status_callback_event=['initiated', 'ringing', 'answered', 'completed'],
+            status_callback_method="POST"
+        )
+        
+        if call.sid:
+            conversations[call.sid] = {
+                "history": [],
+                "stage": "cold_call",
+                "phase": "SALES",
+                "current_step": 1,
+                "committed": False,
+                "client_name": prospect_name,
+                "firm_name": firm_name,
+                "email": None,
+                "phone_number": to_number,
+                "selected_addons": [],
+                "selected_maintenance": None,
+                "payment_completed": False,
+                "payment_confirmed_by_webhook": False,
+                "silence_count": 0,
+                "is_cold_call": True
+            }
+        
+        print(f"✅ Call initiated! SID: {call.sid}")
+        
+        return {
+            "status": "success",
+            "message": "Cold call initiated",
+            "call_sid": call.sid,
+            "to_number": to_number,
+            "prospect_name": prospect_name,
+            "firm_name": firm_name
+        }
+        
+    except Exception as e:
+        print(f"❌ Error making cold call: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/voice/outbound/cold-call-start")
+async def cold_call_start(request: Request):
+    """Entry point when cold call connects"""
+    form_data = await request.form()
+    to_number = form_data.get('To')
+    call_sid = form_data.get('CallSid')
+    call_status = form_data.get('CallStatus')
+    
+    print(f"📞 Cold call connected to {to_number}, Status: {call_status}")
+    
+    response = VoiceResponse()
+    
+    prospect_name = ""
+    firm_name = ""
+    if call_sid in conversations:
+        prospect_name = conversations[call_sid].get("client_name", "")
+        firm_name = conversations[call_sid].get("firm_name", "")
+    
+    # FIRST MESSAGE: Only ask if this is the right person - DON'T say anything else yet!
+    if prospect_name:
+        opening_text = f"Hi, is this {prospect_name}?"
+    else:
+        opening_text = "Hi, may I speak with the person in charge of client intake?"
+    
+    response.say(opening_text, voice=VOICE)
+    
+    # Wait for their response (yes/no to identity confirmation)
+    gather = Gather(
+        input='speech dtmf',
+        timeout=3,  # Give them time to respond
+        action='/voice/cold-call-response',
+        method='POST',
+        speech_timeout='auto'
+    )
+    response.append(gather)
+    
+    # If no response, leave voicemail
+    voicemail_text = (f"This is calling about LawBot 360 for {firm_name if firm_name else 'your law firm'}. "
+                     f"We help law firms capture client leads 24/7 with AI. "
+                     f"Visit 4 d gaming dot games or call us back at 504-383-3692. Thanks!")
+    
+    response.say(voicemail_text, voice=VOICE)
+    
+    return PlainTextResponse(content=str(response), media_type="application/xml")
+
+
+@app.post("/voice/call-status")
+async def call_status_callback(request: Request):
+    """Track call status for cold calls"""
+    form_data = await request.form()
+    call_sid = form_data.get('CallSid')
+    call_status = form_data.get('CallStatus')
+    to_number = form_data.get('To')
+    
+    print(f"📊 Call Status Update - SID: {call_sid}, Status: {call_status}, To: {to_number}")
+    
+    if call_status == 'completed':
+        print(f"✅ Call completed: {call_sid}")
+    elif call_status == 'busy':
+        print(f"📵 Line busy: {to_number}")
+    elif call_status == 'no-answer':
+        print(f"📭 No answer: {to_number}")
+    elif call_status == 'failed':
+        print(f"❌ Call failed: {call_sid}")
+    
+    return {"status": "ok"}
 
 @app.post("/voice/inbound")
 async def handle_inbound_call(request: Request):
@@ -714,33 +1074,133 @@ async def handle_cold_call_response(request: Request):
     
     response = VoiceResponse()
     
-    # Check for interest
-    interested_keywords = ['yes', 'sure', 'okay', 'interested', 'tell me', 'go ahead']
-    not_interested_keywords = ['no', 'busy', 'not interested', 'remove', 'stop']
+    # Get conversation state to know if this is identity confirmation or pitch response
+    conv = conversations.get(call_sid, {})
+    identity_confirmed = conv.get("identity_confirmed", False)
+    firm_name = conv.get("firm_name", "")
     
-    if any(word in speech_result for word in interested_keywords) or digits == '1':
-        # They're interested - start AI conversation
-        ai_text = get_ai_response(call_sid, "Customer said yes to 5 minute pitch", "discovery")
-        response.say(ai_text, voice=VOICE)
+    if not identity_confirmed:
+        # FIRST RESPONSE: They're confirming their identity
+        affirmative_responses = ['yes', 'yeah', 'yep', 'speaking', 'this is', 'that\'s me', 'correct']
+        negative_responses = ['no', 'wrong number', 'not here', 'not available']
         
-        # Continue conversation
-        response.redirect("/voice/conversation")
-        
-    elif any(word in speech_result for word in not_interested_keywords):
-        # Not interested
-        response.say("No problem. Have a great day!", voice=VOICE)
-        response.hangup()
-        
+        if any(word in speech_result for word in affirmative_responses):
+            # They confirmed identity - NOW introduce company and ask for time
+            if call_sid in conversations:
+                conversations[call_sid]["identity_confirmed"] = True
+            
+            intro_text = (f"Great! This is calling from 4D Gaming about LawBot 360 for {firm_name if firm_name else 'your firm'}. "
+                         f"We help law firms capture client leads 24/7 with AI. Got 5 minutes?")
+            
+            response.say(intro_text, voice=VOICE)
+            
+            # Wait for their response to "got 5 minutes?"
+            gather = Gather(
+                input='speech dtmf',
+                timeout=3,
+                action='/voice/cold-call-response',
+                method='POST',
+                speech_timeout='auto'
+            )
+            response.append(gather)
+            
+            # If no response
+            response.say("I'll take that as a no. Have a great day!", voice=VOICE)
+            response.hangup()
+            
+        elif any(word in speech_result for word in negative_responses):
+            # Wrong person or not available
+            response.say("Sorry about that! Is there a better time to reach them, or should I call back later?", voice=VOICE)
+            response.hangup()
+            
+        else:
+            # Unclear response to identity question
+            response.say("Sorry, I didn't catch that. Is this the right person?", voice=VOICE)
+            
+            gather = Gather(
+                input='speech dtmf',
+                timeout=3,
+                action='/voice/cold-call-response',
+                method='POST'
+            )
+            response.append(gather)
+            
+            response.say("I'll try again later. Thanks!", voice=VOICE)
+            response.hangup()
+    
     else:
-        # Unclear - ask again
-        response.say("Sorry, I didn't catch that. Do you have 5 minutes to hear how we can help? Press 1 for yes, 2 for no.", voice=VOICE)
+        # SECOND RESPONSE: They're responding to "got 5 minutes?"
+        interested_keywords = ['yes', 'sure', 'okay', 'interested', 'tell me', 'go ahead']
+        not_interested_keywords = ['no', 'busy', 'not interested', 'remove', 'stop']
         
-        gather = Gather(
-            num_digits=1,
-            action='/voice/cold-call-response',
-            timeout=3
-        )
-        response.append(gather)
+        if any(word in speech_result for word in interested_keywords) or digits == '1':
+            # They're interested - start AI conversation with first question
+            ai_text = get_ai_response(call_sid, "Customer said yes to 5 minute pitch", "discovery")
+            response.say(ai_text, voice=VOICE)
+            
+            # Set up gather to wait for their response (don't redirect!)
+            gather = Gather(
+                input='speech',
+                action='/voice/conversation',
+                method='POST',
+                speech_timeout='auto',
+                timeout=3
+            )
+            response.append(gather)
+            
+            # If no response, prompt them
+            response.say("Are you still there?", voice=VOICE)
+            
+            gather2 = Gather(
+                input='speech',
+                action='/voice/conversation',
+                method='POST',
+                timeout=3
+            )
+            response.append(gather2)
+            
+            # Still no response, try one more time
+            response.say("I'm still here if you have questions.", voice=VOICE)
+            
+            gather3 = Gather(
+                input='speech',
+                action='/voice/conversation',
+                method='POST',
+                timeout=3
+            )
+            response.append(gather3)
+            
+            # After all attempts, transfer
+            response.say("I'm having trouble hearing you. Let me connect you with someone who can help.", voice=VOICE)
+            try:
+                response.dial(
+                    number=HUMAN_PHONE,
+                    timeout=30,
+                    action='/voice/dial-status',
+                    method='POST'
+                )
+            except Exception as e:
+                print(f"❌ Error adding dial to response: {e}")
+                response.say("Please call us directly at 504-383-3692.", voice=VOICE)
+            
+        elif any(word in speech_result for word in not_interested_keywords):
+            # Not interested
+            response.say("No problem. Have a great day!", voice=VOICE)
+            response.hangup()
+            
+        else:
+            # Unclear - ask again
+            response.say("Sorry, I didn't catch that. Do you have 5 minutes to hear how we can help? Press 1 for yes, 2 for no.", voice=VOICE)
+            
+            gather = Gather(
+                num_digits=1,
+                action='/voice/cold-call-response',
+                timeout=3
+            )
+            response.append(gather)
+            
+            response.say("I'll let you go. Have a great day!", voice=VOICE)
+            response.hangup()
     
     return PlainTextResponse(content=str(response), media_type="application/xml")
 
