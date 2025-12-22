@@ -913,30 +913,26 @@ async def cold_call_start(request: Request):
         prospect_name = conversations[call_sid].get("client_name", "")
         firm_name = conversations[call_sid].get("firm_name", "")
     
-    if prospect_name and firm_name:
-        opening_text = (f"Hi, may I speak with {prospect_name}? "
-                       f"This is calling from 4D Gaming about LawBot 360 for {firm_name}. "
-                       f"Quick question - are you currently losing client leads when your office is closed?")
-    elif firm_name:
-        opening_text = (f"Hi, this is calling from 4D Gaming about LawBot 360 for {firm_name}. "
-                       f"Quick question - are you currently losing client leads when your office is closed?")
+    # FIRST MESSAGE: Only ask if this is the right person - DON'T say anything else yet!
+    if prospect_name:
+        opening_text = f"Hi, is this {prospect_name}?"
     else:
-        opening_text = ("Hi! This is calling from 4D Gaming. "
-                       "Quick question - is your law firm losing leads outside business hours? "
-                       "We fix that with AI. Got 5 minutes?")
+        opening_text = "Hi, may I speak with the person in charge of client intake?"
     
     response.say(opening_text, voice=VOICE)
     
+    # Wait for their response (yes/no to identity confirmation)
     gather = Gather(
         input='speech dtmf',
-        timeout=4,
+        timeout=5,  # Give them time to respond
         action='/voice/cold-call-response',
         method='POST',
         speech_timeout='auto'
     )
     response.append(gather)
     
-    voicemail_text = (f"Hi, this is calling about LawBot 360. "
+    # If no response, leave voicemail
+    voicemail_text = (f"This is calling about LawBot 360 for {firm_name if firm_name else 'your law firm'}. "
                      f"We help law firms capture client leads 24/7 with AI. "
                      f"Visit 4 d gaming dot games or call us back at 504-383-3692. Thanks!")
     
@@ -1050,33 +1046,91 @@ async def handle_cold_call_response(request: Request):
     
     response = VoiceResponse()
     
-    # Check for interest
-    interested_keywords = ['yes', 'sure', 'okay', 'interested', 'tell me', 'go ahead']
-    not_interested_keywords = ['no', 'busy', 'not interested', 'remove', 'stop']
+    # Get conversation state to know if this is identity confirmation or pitch response
+    conv = conversations.get(call_sid, {})
+    identity_confirmed = conv.get("identity_confirmed", False)
+    firm_name = conv.get("firm_name", "")
     
-    if any(word in speech_result for word in interested_keywords) or digits == '1':
-        # They're interested - start AI conversation
-        ai_text = get_ai_response(call_sid, "Customer said yes to 5 minute pitch", "discovery")
-        response.say(ai_text, voice=VOICE)
+    if not identity_confirmed:
+        # FIRST RESPONSE: They're confirming their identity
+        affirmative_responses = ['yes', 'yeah', 'yep', 'speaking', 'this is', 'that\'s me', 'correct']
+        negative_responses = ['no', 'wrong number', 'not here', 'not available']
         
-        # Continue conversation
-        response.redirect("/voice/conversation")
-        
-    elif any(word in speech_result for word in not_interested_keywords):
-        # Not interested
-        response.say("No problem. Have a great day!", voice=VOICE)
-        response.hangup()
-        
+        if any(word in speech_result for word in affirmative_responses):
+            # They confirmed identity - NOW introduce company and ask for time
+            if call_sid in conversations:
+                conversations[call_sid]["identity_confirmed"] = True
+            
+            intro_text = (f"Great! This is calling from 4D Gaming about LawBot 360 for {firm_name if firm_name else 'your firm'}. "
+                         f"We help law firms capture client leads 24/7 with AI. Got 5 minutes?")
+            
+            response.say(intro_text, voice=VOICE)
+            
+            # Wait for their response to "got 5 minutes?"
+            gather = Gather(
+                input='speech dtmf',
+                timeout=5,
+                action='/voice/cold-call-response',
+                method='POST',
+                speech_timeout='auto'
+            )
+            response.append(gather)
+            
+            # If no response
+            response.say("I'll take that as a no. Have a great day!", voice=VOICE)
+            response.hangup()
+            
+        elif any(word in speech_result for word in negative_responses):
+            # Wrong person or not available
+            response.say("Sorry about that! Is there a better time to reach them, or should I call back later?", voice=VOICE)
+            response.hangup()
+            
+        else:
+            # Unclear response to identity question
+            response.say("Sorry, I didn't catch that. Is this the right person?", voice=VOICE)
+            
+            gather = Gather(
+                input='speech dtmf',
+                timeout=5,
+                action='/voice/cold-call-response',
+                method='POST'
+            )
+            response.append(gather)
+            
+            response.say("I'll try again later. Thanks!", voice=VOICE)
+            response.hangup()
+    
     else:
-        # Unclear - ask again
-        response.say("Sorry, I didn't catch that. Do you have 5 minutes to hear how we can help? Press 1 for yes, 2 for no.", voice=VOICE)
+        # SECOND RESPONSE: They're responding to "got 5 minutes?"
+        interested_keywords = ['yes', 'sure', 'okay', 'interested', 'tell me', 'go ahead']
+        not_interested_keywords = ['no', 'busy', 'not interested', 'remove', 'stop']
         
-        gather = Gather(
-            num_digits=1,
-            action='/voice/cold-call-response',
-            timeout=3
-        )
-        response.append(gather)
+        if any(word in speech_result for word in interested_keywords) or digits == '1':
+            # They're interested - start AI conversation
+            ai_text = get_ai_response(call_sid, "Customer said yes to 5 minute pitch", "discovery")
+            response.say(ai_text, voice=VOICE)
+            
+            # Continue conversation
+            response.redirect("/voice/conversation")
+            
+        elif any(word in speech_result for word in not_interested_keywords):
+            # Not interested
+            response.say("No problem. Have a great day!", voice=VOICE)
+            response.hangup()
+            
+        else:
+            # Unclear - ask again
+            response.say("Sorry, I didn't catch that. Do you have 5 minutes to hear how we can help? Press 1 for yes, 2 for no.", voice=VOICE)
+            
+            gather = Gather(
+                num_digits=1,
+                action='/voice/cold-call-response',
+                timeout=3
+            )
+            response.append(gather)
+            
+            response.say("I'll let you go. Have a great day!", voice=VOICE)
+            response.hangup()
     
     return PlainTextResponse(content=str(response), media_type="application/xml")
 
