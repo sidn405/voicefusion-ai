@@ -78,6 +78,8 @@ def transfer_to_human(response: VoiceResponse, reason: str = "Transfer requested
 def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
     """Get AI response based on conversation context"""
     
+    print(f"🔵 get_ai_response() called - call_sid: {call_sid}, input: '{user_input}', stage: {stage}")
+    
     # Initialize conversation if needed
     if call_sid not in conversations:
         conversations[call_sid] = {
@@ -515,6 +517,28 @@ Remember: Be PATIENT, HELPFUL, ONE STEP AT A TIME. They'll see pricing in the po
 {silence_context}
 """
     
+    # If in ONBOARDING, check if user is indicating step completion BEFORE generating AI response
+    if conv["phase"] == "ONBOARDING":
+        user_input_lower = user_input.lower().strip()
+        
+        # Step 1: Portal opened
+        if conv.get("current_step", 1) == 1:
+            if any(phrase in user_input_lower for phrase in ["it's open", "is open", "it is open", "opened it", "i have it open", "portal is open", "i'm in", "got it open", "have it"]):
+                print(f"✅ User confirmed Step 1 complete: '{user_input}' - moving to Step 2")
+                conv["current_step"] = 2
+        
+        # Step 2: Account created / logged in
+        elif conv.get("current_step") == 2:
+            if any(phrase in user_input_lower for phrase in ["i'm in", "logged in", "signed in", "account created", "i'm logged in", "created account"]):
+                print(f"✅ User confirmed Step 2 complete: '{user_input}' - moving to Step 3")
+                conv["current_step"] = 3
+        
+        # General completion indicators for mid-steps (not critical steps)
+        elif conv.get("current_step") in [3, 4, 5, 6, 7, 8, 9, 10, 11]:
+            if any(word in user_input_lower for word in ["done", "finished", "completed", "ready", "next", "yes", "okay"]):
+                print(f"✅ User indicated completion: '{user_input}' - moving from step {conv.get('current_step')} to {conv.get('current_step') + 1}")
+                conv["current_step"] = conv.get("current_step") + 1
+    
     # Get AI response
     messages = [
         {"role": "system", "content": system_prompt}
@@ -898,12 +922,13 @@ async def conversation(request: Request):
         response.say(ai_text, voice=VOICE)
         
         # Continue conversation - wait for their response
+        # Use longer timeout (7 seconds) after important questions
         gather = Gather(
             input='speech',
             action='/voice/conversation',
             method='POST',
             speech_timeout='auto',
-            timeout=3,  # Give users 5 seconds to start speaking
+            timeout=5,  # 7 seconds for important questions that need thinking
             finish_on_key='#'
         )
         response.append(gather)
