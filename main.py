@@ -290,24 +290,30 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
         # Add cold call specific instructions if this is a discovery stage
         cold_call_context = ""
         if stage == "discovery":
-            cold_call_context = """
+            cold_call_context = f"""
 ⚠️⚠️⚠️ COLD CALL MODE - SPECIAL INSTRUCTIONS:
-This is a COLD CALL. The prospect just agreed to hear your pitch. DO NOT dump features immediately!
+This is a COLD CALL. The prospect just agreed to hear your pitch.
+
+IMPORTANT: You ALREADY KNOW their name and firm:
+- Name: {conv.get('client_name', 'Unknown')}
+- Firm: {conv.get('firm_name', 'Unknown')}
+DO NOT ask for their name or firm name - you already have it!
 
 COLD CALL STRUCTURE (CRITICAL):
-1. FIRST: Ask pain point questions (ONE at a time):
+1. FIRST: Jump straight to pain point questions (ONE at a time):
    - "Are you currently losing leads when your office is closed after hours?"
    - Wait for response, then: "How are you handling client intake outside business hours right now?"
    - Then: "What practice areas do you focus on?"
    
 2. ONLY AFTER 2-3 PAIN POINT QUESTIONS: Briefly explain solution
-   - Keep it short: "LawBot 360 is an AI system that handles intake 24/7, captures leads you're missing, and integrates with your existing tools"
+   - Keep it short: "LawBot 360 is an AI system that handles intake 24/7 for {conv.get('firm_name', 'your firm')}, captures leads you're missing, and integrates with your existing tools"
    - Ask: "Does that sound like it would help?"
    
 3. Build value naturally through conversation, don't info dump
 
 CRITICAL FOR COLD CALLS:
-- Start with QUESTIONS, not features
+- DO NOT ask for name or firm - you already have it!
+- Start with QUESTIONS about pain points, not features
 - Discover their pain points FIRST
 - Only explain features AFTER understanding their needs
 - Keep responses SHORT (1-2 sentences)
@@ -1119,7 +1125,7 @@ async def handle_cold_call_response(request: Request):
             
             gather = Gather(
                 input='speech dtmf',
-                timeout=5,
+                timeout=3,
                 action='/voice/cold-call-response',
                 method='POST'
             )
@@ -1145,7 +1151,7 @@ async def handle_cold_call_response(request: Request):
                 action='/voice/conversation',
                 method='POST',
                 speech_timeout='auto',
-                timeout=5
+                timeout=3
             )
             response.append(gather)
 
