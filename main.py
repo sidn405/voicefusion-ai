@@ -262,7 +262,7 @@ CONSULTATIVE APPROACH:
 4. Solution: "LawBot 360 handles that 24/7 - our clients see 40% more consultations"
 5. Value: "If you could capture even 2-3 more quality leads per month, that would be significant, right?"
 6. Trial close: "Does that sound like it would help your firm?"
-7. When they say YES → Transition: "Perfect! Let's get you set up right now so you can start capturing those leads."
+7. When they say YES → Transition: "Perfect! Can I get you set up so you can start capturing those leads."
 
 IMPORTANT: After trial close, if they show interest, IMMEDIATELY transition to setup. Don't ask more questions. Don't mention demos. Just say "Perfect! Let's get you set up right now."
 
