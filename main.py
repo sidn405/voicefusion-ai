@@ -718,7 +718,7 @@ async def handle_cold_call_response(request: Request):
         gather = Gather(
             num_digits=1,
             action='/voice/cold-call-response',
-            timeout=3
+            timeout=5
         )
         response.append(gather)
     
@@ -810,8 +810,32 @@ async def conversation(request: Request):
     
     # Check for human transfer request (user says "human" or presses *)
     # Only check if we actually have speech input
-    transfer_triggers = ['human', 'person', 'representative', 'transfer']
-    has_trigger_word = bool(speech_result) and any(word in speech_result.lower() for word in transfer_triggers)
+    # Use word boundaries to avoid false positives (e.g., "personal injury" should not trigger "person")
+    transfer_triggers = {
+        'human': ['human', 'talk to a human', 'speak to a human', 'real human'],
+        'person': ['real person', 'talk to a person', 'speak to a person', 'live person'],
+        'representative': ['representative'],
+        'transfer': ['transfer me', 'transfer to']
+    }
+    
+    has_trigger_word = False
+    if speech_result:
+        speech_lower = speech_result.lower()
+        # Check for specific phrases first
+        for trigger_type, phrases in transfer_triggers.items():
+            for phrase in phrases:
+                if phrase in speech_lower:
+                    has_trigger_word = True
+                    break
+            if has_trigger_word:
+                break
+        
+        # Also check for standalone "human" or "representative" as single words
+        if not has_trigger_word:
+            words = speech_lower.split()
+            if 'human' in words or 'representative' in words:
+                has_trigger_word = True
+    
     has_star = '*' in digits
     
     print(f"🔍 Transfer check - Has trigger word: {has_trigger_word}, Has *: {has_star}, Speech: '{speech_result}'")
