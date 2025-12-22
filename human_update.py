@@ -78,6 +78,8 @@ def transfer_to_human(response: VoiceResponse, reason: str = "Transfer requested
 def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
     """Get AI response based on conversation context"""
     
+    print(f"🔵 get_ai_response() called - call_sid: {call_sid}, input: '{user_input}', stage: {stage}")
+    
     # Initialize conversation if needed
     if call_sid not in conversations:
         conversations[call_sid] = {
@@ -155,11 +157,24 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
             return pricing_response + " Most firms find it pays for itself within months. Does the concept make sense for your practice?"
     
     # If we JUST switched to onboarding (and NOT asking about price), provide Step 1 directly
+    # BUT FIRST check if user is already confirming they opened the portal!
     if conv.get("just_switched"):
         conv["just_switched"] = False  # Clear flag
-        step1_message = "Perfect! Open your browser and go to 4 d gaming dot games slash client dash portal dot html. Tell me when you have it open."
-        conv["history"].append({"role": "assistant", "content": step1_message})
-        return step1_message
+        
+        # Check if user is confirming portal is open (don't repeat instruction if they already did it!)
+        user_input_check = user_input.lower().strip().rstrip('.,!?;')
+        if "open" in user_input_check or user_input_check in ["yes", "yeah", "yep", "ok", "okay", "sure", "done", "ready"]:
+            # User already opened it! Move to Step 2 and tell them to login
+            print(f"✅ User confirmed portal opened during phase switch: '{user_input}' - skipping Step 1, going to Step 2")
+            conv["current_step"] = 2
+            step2_message = "Great! Now create your account or log in if you have one. Let me know when you're in."
+            conv["history"].append({"role": "assistant", "content": step2_message})
+            return step2_message
+        else:
+            # Normal Step 1 instruction
+            step1_message = "Perfect! Open your browser and go to 4 d gaming dot games slash client dash portal dot html. Tell me when you have it open."
+            conv["history"].append({"role": "assistant", "content": step1_message})
+            return step1_message
     
     # Detect if they've committed to moving forward
     # Strip punctuation for better matching
@@ -515,6 +530,34 @@ Remember: Be PATIENT, HELPFUL, ONE STEP AT A TIME. They'll see pricing in the po
 {silence_context}
 """
     
+    # If in ONBOARDING, check if user is indicating step completion BEFORE generating AI response
+    if conv["phase"] == "ONBOARDING":
+        # Strip both whitespace and punctuation for better matching
+        user_input_lower = user_input.lower().strip().rstrip('.,!?;')
+        
+        print(f"🔍 ONBOARDING step check - Current step: {conv.get('current_step', 1)}, Input: '{user_input_lower}'")
+        
+        # Step 1: Portal opened - if they say anything about "open" at Step 1, they're confirming
+        if conv.get("current_step", 1) == 1:
+            # Simplified: if they mention "open" or confirm they're "in", they've opened the portal
+            if "open" in user_input_lower or user_input_lower in ["yes", "yeah", "yep", "ok", "okay", "sure", "done", "ready"]:
+                print(f"✅ User confirmed Step 1 complete: '{user_input}' - moving to Step 2")
+                conv["current_step"] = 2
+            else:
+                print(f"⚠️ Step 1: No confirmation detected in '{user_input_lower}'")
+        
+        # Step 2: Account created / logged in
+        elif conv.get("current_step") == 2:
+            if any(phrase in user_input_lower for phrase in ["i'm in", "logged in", "signed in", "account created", "i'm logged in", "created account"]):
+                print(f"✅ User confirmed Step 2 complete: '{user_input}' - moving to Step 3")
+                conv["current_step"] = 3
+        
+        # General completion indicators for mid-steps (not critical steps)
+        elif conv.get("current_step") in [3, 4, 5, 6, 7, 8, 9, 10, 11]:
+            if any(word in user_input_lower for word in ["done", "finished", "completed", "ready", "next", "yes", "okay"]):
+                print(f"✅ User indicated completion: '{user_input}' - moving from step {conv.get('current_step')} to {conv.get('current_step') + 1}")
+                conv["current_step"] = conv.get("current_step") + 1
+    
     # Get AI response
     messages = [
         {"role": "system", "content": system_prompt}
@@ -694,7 +737,7 @@ async def handle_cold_call_response(request: Request):
         gather = Gather(
             num_digits=1,
             action='/voice/cold-call-response',
-            timeout=3
+            timeout=5
         )
         response.append(gather)
     
@@ -786,8 +829,32 @@ async def conversation(request: Request):
     
     # Check for human transfer request (user says "human" or presses *)
     # Only check if we actually have speech input
-    transfer_triggers = ['human', 'person', 'representative', 'transfer']
-    has_trigger_word = bool(speech_result) and any(word in speech_result.lower() for word in transfer_triggers)
+    # Use word boundaries to avoid false positives (e.g., "personal injury" should not trigger "person")
+    transfer_triggers = {
+        'human': ['human', 'talk to a human', 'speak to a human', 'real human'],
+        'person': ['real person', 'talk to a person', 'speak to a person', 'live person'],
+        'representative': ['representative'],
+        'transfer': ['transfer me', 'transfer to']
+    }
+    
+    has_trigger_word = False
+    if speech_result:
+        speech_lower = speech_result.lower()
+        # Check for specific phrases first
+        for trigger_type, phrases in transfer_triggers.items():
+            for phrase in phrases:
+                if phrase in speech_lower:
+                    has_trigger_word = True
+                    break
+            if has_trigger_word:
+                break
+        
+        # Also check for standalone "human" or "representative" as single words
+        if not has_trigger_word:
+            words = speech_lower.split()
+            if 'human' in words or 'representative' in words:
+                has_trigger_word = True
+    
     has_star = '*' in digits
     
     print(f"🔍 Transfer check - Has trigger word: {has_trigger_word}, Has *: {has_star}, Speech: '{speech_result}'")
@@ -898,12 +965,13 @@ async def conversation(request: Request):
         response.say(ai_text, voice=VOICE)
         
         # Continue conversation - wait for their response
+        # Use longer timeout (7 seconds) after important questions
         gather = Gather(
             input='speech',
             action='/voice/conversation',
             method='POST',
             speech_timeout='auto',
-            timeout=3,  # Give users 5 seconds to start speaking
+            timeout=7,  # 7 seconds for important questions that need thinking
             finish_on_key='#'
         )
         response.append(gather)

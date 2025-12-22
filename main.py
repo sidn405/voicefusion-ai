@@ -157,11 +157,24 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
             return pricing_response + " Most firms find it pays for itself within months. Does the concept make sense for your practice?"
     
     # If we JUST switched to onboarding (and NOT asking about price), provide Step 1 directly
+    # BUT FIRST check if user is already confirming they opened the portal!
     if conv.get("just_switched"):
         conv["just_switched"] = False  # Clear flag
-        step1_message = "Perfect! Open your browser and go to 4 d gaming dot games slash client dash portal dot html. Tell me when you have it open."
-        conv["history"].append({"role": "assistant", "content": step1_message})
-        return step1_message
+        
+        # Check if user is confirming portal is open (don't repeat instruction if they already did it!)
+        user_input_check = user_input.lower().strip().rstrip('.,!?;')
+        if "open" in user_input_check or user_input_check in ["yes", "yeah", "yep", "ok", "okay", "sure", "done", "ready"]:
+            # User already opened it! Move to Step 2 and tell them to login
+            print(f"✅ User confirmed portal opened during phase switch: '{user_input}' - skipping Step 1, going to Step 2")
+            conv["current_step"] = 2
+            step2_message = "Great! Now create your account or log in if you have one. Let me know when you're in."
+            conv["history"].append({"role": "assistant", "content": step2_message})
+            return step2_message
+        else:
+            # Normal Step 1 instruction
+            step1_message = "Perfect! Open your browser and go to 4 d gaming dot games slash client dash portal dot html. Tell me when you have it open."
+            conv["history"].append({"role": "assistant", "content": step1_message})
+            return step1_message
     
     # Detect if they've committed to moving forward
     # Strip punctuation for better matching
@@ -519,13 +532,19 @@ Remember: Be PATIENT, HELPFUL, ONE STEP AT A TIME. They'll see pricing in the po
     
     # If in ONBOARDING, check if user is indicating step completion BEFORE generating AI response
     if conv["phase"] == "ONBOARDING":
-        user_input_lower = user_input.lower().strip()
+        # Strip both whitespace and punctuation for better matching
+        user_input_lower = user_input.lower().strip().rstrip('.,!?;')
         
-        # Step 1: Portal opened
+        print(f"🔍 ONBOARDING step check - Current step: {conv.get('current_step', 1)}, Input: '{user_input_lower}'")
+        
+        # Step 1: Portal opened - if they say anything about "open" at Step 1, they're confirming
         if conv.get("current_step", 1) == 1:
-            if any(phrase in user_input_lower for phrase in ["it's open", "is open", "it is open", "opened it", "i have it open", "portal is open", "i'm in", "got it open", "have it"]):
+            # Simplified: if they mention "open" or confirm they're "in", they've opened the portal
+            if "open" in user_input_lower or user_input_lower in ["yes", "yeah", "yep", "ok", "okay", "sure", "done", "ready"]:
                 print(f"✅ User confirmed Step 1 complete: '{user_input}' - moving to Step 2")
                 conv["current_step"] = 2
+            else:
+                print(f"⚠️ Step 1: No confirmation detected in '{user_input_lower}'")
         
         # Step 2: Account created / logged in
         elif conv.get("current_step") == 2:
@@ -718,7 +737,7 @@ async def handle_cold_call_response(request: Request):
         gather = Gather(
             num_digits=1,
             action='/voice/cold-call-response',
-            timeout=5
+            timeout=3
         )
         response.append(gather)
     
