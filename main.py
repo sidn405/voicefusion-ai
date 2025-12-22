@@ -287,12 +287,40 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
             silence_context = "\n\nNOTE: User had brief silence but is now responding. Acknowledge naturally and continue conversation without making a big deal of it."
     
     if conv["phase"] == "SALES":
+        # Add cold call specific instructions if this is a discovery stage
+        cold_call_context = ""
+        if stage == "discovery":
+            cold_call_context = """
+⚠️⚠️⚠️ COLD CALL MODE - SPECIAL INSTRUCTIONS:
+This is a COLD CALL. The prospect just agreed to hear your pitch. DO NOT dump features immediately!
+
+COLD CALL STRUCTURE (CRITICAL):
+1. FIRST: Ask pain point questions (ONE at a time):
+   - "Are you currently losing leads when your office is closed after hours?"
+   - Wait for response, then: "How are you handling client intake outside business hours right now?"
+   - Then: "What practice areas do you focus on?"
+   
+2. ONLY AFTER 2-3 PAIN POINT QUESTIONS: Briefly explain solution
+   - Keep it short: "LawBot 360 is an AI system that handles intake 24/7, captures leads you're missing, and integrates with your existing tools"
+   - Ask: "Does that sound like it would help?"
+   
+3. Build value naturally through conversation, don't info dump
+
+CRITICAL FOR COLD CALLS:
+- Start with QUESTIONS, not features
+- Discover their pain points FIRST
+- Only explain features AFTER understanding their needs
+- Keep responses SHORT (1-2 sentences)
+- This is a discovery conversation, not a product presentation
+"""
+        
         system_prompt = f"""You are a professional sales representative for LawBot 360, an AI client intake system for law firms.
 
 Current stage: {stage}
 Client name: {conv.get('client_name', 'Unknown')}
 Firm: {conv.get('firm_name', 'Unknown')}
 Phase: SALES MODE - Building Value
+{cold_call_context}
 
 YOUR GOAL: Build interest and value, then transition to setup when they show interest
 
@@ -1111,7 +1139,23 @@ async def handle_cold_call_response(request: Request):
             response.say(ai_text, voice=VOICE)
             
             # Continue conversation
-            response.redirect("/voice/conversation")
+            # Set up gather to wait for response
+            gather = Gather(
+                input='speech',
+                action='/voice/conversation',
+                timeout=7
+            )
+            response.append(gather)
+
+            # If no response, prompt
+            response.say("Are you still there?")
+            gather2 = Gather(...)
+            response.append(gather2)
+
+            # Still no response
+            response.say("I'm still here if you have questions.")
+            gather3 = Gather(...)
+            response.append(gather3)
             
         elif any(word in speech_result for word in not_interested_keywords):
             # Not interested

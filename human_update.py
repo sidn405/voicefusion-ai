@@ -952,7 +952,7 @@ async def cold_call_start(request: Request):
     # Wait for their response (yes/no to identity confirmation)
     gather = Gather(
         input='speech dtmf',
-        timeout=3,  # Give them time to respond
+        timeout=5,  # Give them time to respond
         action='/voice/cold-call-response',
         method='POST',
         speech_timeout='auto'
@@ -1097,7 +1097,7 @@ async def handle_cold_call_response(request: Request):
             # Wait for their response to "got 5 minutes?"
             gather = Gather(
                 input='speech dtmf',
-                timeout=3,
+                timeout=5,
                 action='/voice/cold-call-response',
                 method='POST',
                 speech_timeout='auto'
@@ -1119,7 +1119,7 @@ async def handle_cold_call_response(request: Request):
             
             gather = Gather(
                 input='speech dtmf',
-                timeout=3,
+                timeout=5,
                 action='/voice/cold-call-response',
                 method='POST'
             )
@@ -1144,7 +1144,7 @@ async def handle_cold_call_response(request: Request):
                 action='/voice/conversation',
                 method='POST',
                 speech_timeout='auto',
-                timeout=3
+                timeout=7
             )
             response.append(gather)
             
@@ -1155,7 +1155,7 @@ async def handle_cold_call_response(request: Request):
                 input='speech',
                 action='/voice/conversation',
                 method='POST',
-                timeout=3
+                timeout=5
             )
             response.append(gather2)
             
@@ -1166,7 +1166,7 @@ async def handle_cold_call_response(request: Request):
                 input='speech',
                 action='/voice/conversation',
                 method='POST',
-                timeout=3
+                timeout=5
             )
             response.append(gather3)
             
