@@ -146,8 +146,14 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
         any(phrase in user_input_clean for phrase in affirmative_phrases)
     )
     
+    # Check for negative responses (don't switch on these)
+    negative_responses = ['no', 'nope', 'not yet', 'not ready', 'not now', 'not sure', 
+                         'i don\'t think', 'maybe later', 'need to think']
+    user_is_negative = any(user_input_clean.startswith(neg) or neg in user_input_clean 
+                          for neg in negative_responses)
+    
     # Check if we should switch from SALES to ONBOARDING phase
-    if conv["phase"] == "SALES" and user_is_affirmative:
+    if conv["phase"] == "SALES" and user_is_affirmative and not user_is_negative:
         # User gave a clear affirmative response
         
         # Get last 2 bot messages to check what kind of question was asked
@@ -165,6 +171,9 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
             'does the concept make sense',  # Added
             'concept make sense',  # Added
             'ready to',
+            'are you ready to get set up',  # ACTION CLOSE
+            'ready to get set up',  # ACTION CLOSE
+            'ready to get started',  # ACTION CLOSE
             'want to get started',
             'shall we get',
             'would you like',
@@ -256,15 +265,28 @@ PRODUCT: LawBot 360
 - Proven to increase client intake by 40%
 
 CONSULTATIVE APPROACH:
-1. Opening: "Great! I'm here to help. Quick question - are you currently losing leads when your office is closed?"
-2. Discovery: Ask about their current intake process (ONE question at a time)
-3. Pain points: Listen and identify what's not working
-4. Solution: "LawBot 360 handles that 24/7 - our clients see 40% more consultations"
-5. Value: "If you could capture even 2-3 more quality leads per month, that would be significant, right?"
-6. Trial close: "Does that sound like it would help your firm?"
-7. When they say YES → Transition: "Perfect! Can I get you set up so you can start capturing those leads."
+1. Opening: "Great! I'm here to help. Before we begin, may I have your name and the name of your firm?"
+2. After getting name/firm: "Thanks [Name]! So, quick question - are you currently losing leads when your office is closed?"
+3. Discovery: Ask about their current intake process (ONE question at a time)
+4. Pain points: Listen and identify what's not working
+5. Solution: "LawBot 360 handles that 24/7 - our clients see 40% more consultations"
+6. Value: "If you could capture even 2-3 more quality leads per month, that would be significant, right?"
+7. Trial close: "Does that sound like it would help your firm?"
+8. Action close: "Are you ready to get set up right now so you can start capturing those leads?"
+   - If YES → Transition to onboarding immediately
+   - If NO or hesitation → Ask: "What's holding you back?" or "What concerns do you have?"
+     Then address their specific objection using their pain points
 
-IMPORTANT: After trial close, if they show interest, IMMEDIATELY transition to setup. Don't ask more questions. Don't mention demos. Just say "Perfect! Let's get you set up right now."
+OBJECTION HANDLING AFTER ACTION CLOSE:
+If they hesitate or say no, USE THEIR PAIN POINTS to close:
+- Hesitation about cost → "Remember you said you're losing leads after hours - even capturing just 2 extra cases a month pays for itself"
+- Need to think about it → "I understand. What specifically do you need to think about? Let's address that now"
+- Need approval → "That makes sense. Who else needs to be involved in this decision?"
+- Timing concerns → "When would be a good time? The sooner we get this set up, the sooner you stop losing those leads you mentioned"
+
+After addressing objection, RE-ASK the action close: "So are you ready to get started?"
+
+IMPORTANT: The action close ("Are you ready to get set up?") is DIFFERENT from the trial close ("Does that sound helpful?"). Trial close = gauging interest. Action close = asking for commitment. If they say NO to action close, find out WHY and overcome it.
 
 HANDLING SHORT RESPONSES:
 - If they say just "yes", "yeah", "sure", "okay" → ALWAYS respond positively and move forward
@@ -609,7 +631,7 @@ async def handle_choice(request: Request):
             action='/voice/conversation',
             method='POST',
             speech_timeout='auto',
-            timeout=5
+            timeout=3
         )
         response.append(gather)
         
@@ -621,7 +643,7 @@ async def handle_choice(request: Request):
             input='speech',
             action='/voice/conversation',
             method='POST',
-            timeout=5
+            timeout=3
         )
         response.append(gather2)
         
@@ -681,6 +703,56 @@ async def conversation(request: Request):
         if call_sid in conversations:
             conversations[call_sid]["phone_number"] = from_number
         
+        # Extract name and firm from the response
+        # Look for patterns like "My name is X" or "I'm X from Y Law"
+        if call_sid in conversations:
+            conv = conversations[call_sid]
+            speech_lower = speech_result.lower()
+            
+            # Try to extract name if not yet captured
+            if not conv.get("client_name"):
+                # Look for "my name is X" or "I'm X" or "this is X"
+                if "my name is" in speech_lower:
+                    # Extract text after "my name is"
+                    name_part = speech_result.split("my name is", 1)[-1].split("and")[0].split("from")[0].strip(" ,.")
+                    if name_part and len(name_part.split()) <= 4:  # Reasonable name length
+                        conv["client_name"] = name_part
+                        print(f"👤 Name captured: {name_part}")
+                elif "i'm" in speech_lower or "i am" in speech_lower:
+                    # Extract after "I'm" or "I am"
+                    for trigger in ["i'm", "i am"]:
+                        if trigger in speech_lower:
+                            name_part = speech_result.split(trigger, 1)[-1].split("and")[0].split("from")[0].split("with")[0].strip(" ,.")
+                            if name_part and len(name_part.split()) <= 4:
+                                conv["client_name"] = name_part
+                                print(f"👤 Name captured: {name_part}")
+                                break
+                elif "this is" in speech_lower:
+                    name_part = speech_result.split("this is", 1)[-1].split("and")[0].split("from")[0].split("with")[0].strip(" ,.")
+                    if name_part and len(name_part.split()) <= 4:
+                        conv["client_name"] = name_part
+                        print(f"👤 Name captured: {name_part}")
+            
+            # Try to extract firm name if not yet captured
+            if not conv.get("firm_name"):
+                # Look for "from X" or "at X" or "with X"
+                for trigger in ["from", "at", "with"]:
+                    if f" {trigger} " in speech_lower:
+                        firm_part = speech_result.split(f" {trigger} ", 1)[-1].strip(" ,.")
+                        # If it contains "law" or "firm" or "attorney" or "legal", likely a firm name
+                        if any(word in firm_part.lower() for word in ["law", "firm", "attorney", "legal", "associates"]):
+                            conv["firm_name"] = firm_part
+                            print(f"🏢 Firm name captured: {firm_part}")
+                            break
+                
+                # Also check for standalone mentions of law firms
+                if not conv.get("firm_name"):
+                    if any(word in speech_lower for word in ["law", "attorney", "legal"]):
+                        # The whole response might be the firm name
+                        if len(speech_result.split()) <= 6:  # Reasonable firm name length
+                            conv["firm_name"] = speech_result.strip(" ,.")
+                            print(f"🏢 Firm name captured: {speech_result.strip(' ,.')}")
+        
         # Check if user provided email address
         if "@" in speech_result and "." in speech_result:
             # Extract email from speech (rough extraction)
@@ -725,7 +797,7 @@ async def conversation(request: Request):
             action='/voice/conversation',
             method='POST',
             speech_timeout='auto',
-            timeout=5,
+            timeout=3,
             finish_on_key='#'
         )
         response.append(gather)
@@ -737,7 +809,7 @@ async def conversation(request: Request):
             input='speech',
             action='/voice/conversation',
             method='POST',
-            timeout=5
+            timeout=3
         )
         response.append(gather2)
         
@@ -748,7 +820,7 @@ async def conversation(request: Request):
             input='speech',
             action='/voice/conversation',
             method='POST',
-            timeout=5
+            timeout=3
         )
         response.append(gather3)
         
@@ -838,7 +910,7 @@ async def fallback_choice(request: Request):
             input='speech',
             action='/voice/conversation',
             method='POST',
-            timeout=5
+            timeout=3
         )
         response.append(gather)
         
