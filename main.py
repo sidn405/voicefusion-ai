@@ -287,12 +287,40 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
             silence_context = "\n\nNOTE: User had brief silence but is now responding. Acknowledge naturally and continue conversation without making a big deal of it."
     
     if conv["phase"] == "SALES":
+        # Add cold call specific instructions if this is a discovery stage
+        cold_call_context = ""
+        if stage == "discovery":
+            cold_call_context = """
+⚠️⚠️⚠️ COLD CALL MODE - SPECIAL INSTRUCTIONS:
+This is a COLD CALL. The prospect just agreed to hear your pitch. DO NOT dump features immediately!
+
+COLD CALL STRUCTURE (CRITICAL):
+1. FIRST: Ask pain point questions (ONE at a time):
+   - "Are you currently losing leads when your office is closed after hours?"
+   - Wait for response, then: "How are you handling client intake outside business hours right now?"
+   - Then: "What practice areas do you focus on?"
+   
+2. ONLY AFTER 2-3 PAIN POINT QUESTIONS: Briefly explain solution
+   - Keep it short: "LawBot 360 is an AI system that handles intake 24/7, captures leads you're missing, and integrates with your existing tools"
+   - Ask: "Does that sound like it would help?"
+   
+3. Build value naturally through conversation, don't info dump
+
+CRITICAL FOR COLD CALLS:
+- Start with QUESTIONS, not features
+- Discover their pain points FIRST
+- Only explain features AFTER understanding their needs
+- Keep responses SHORT (1-2 sentences)
+- This is a discovery conversation, not a product presentation
+"""
+        
         system_prompt = f"""You are a professional sales representative for LawBot 360, an AI client intake system for law firms.
 
 Current stage: {stage}
 Client name: {conv.get('client_name', 'Unknown')}
 Firm: {conv.get('firm_name', 'Unknown')}
 Phase: SALES MODE - Building Value
+{cold_call_context}
 
 YOUR GOAL: Build interest and value, then transition to setup when they show interest
 
@@ -924,7 +952,7 @@ async def cold_call_start(request: Request):
     # Wait for their response (yes/no to identity confirmation)
     gather = Gather(
         input='speech dtmf',
-        timeout=5,  # Give them time to respond
+        timeout=3,  # Give them time to respond
         action='/voice/cold-call-response',
         method='POST',
         speech_timeout='auto'
@@ -1069,7 +1097,7 @@ async def handle_cold_call_response(request: Request):
             # Wait for their response to "got 5 minutes?"
             gather = Gather(
                 input='speech dtmf',
-                timeout=5,
+                timeout=3,
                 action='/voice/cold-call-response',
                 method='POST',
                 speech_timeout='auto'
@@ -1091,7 +1119,7 @@ async def handle_cold_call_response(request: Request):
             
             gather = Gather(
                 input='speech dtmf',
-                timeout=5,
+                timeout=3,
                 action='/voice/cold-call-response',
                 method='POST'
             )
@@ -1106,12 +1134,54 @@ async def handle_cold_call_response(request: Request):
         not_interested_keywords = ['no', 'busy', 'not interested', 'remove', 'stop']
         
         if any(word in speech_result for word in interested_keywords) or digits == '1':
-            # They're interested - start AI conversation
+            # They're interested - start AI conversation with first question
             ai_text = get_ai_response(call_sid, "Customer said yes to 5 minute pitch", "discovery")
             response.say(ai_text, voice=VOICE)
             
-            # Continue conversation
-            response.redirect("/voice/conversation")
+            # Set up gather to wait for their response (don't redirect!)
+            gather = Gather(
+                input='speech',
+                action='/voice/conversation',
+                method='POST',
+                speech_timeout='auto',
+                timeout=3
+            )
+            response.append(gather)
+            
+            # If no response, prompt them
+            response.say("Are you still there?", voice=VOICE)
+            
+            gather2 = Gather(
+                input='speech',
+                action='/voice/conversation',
+                method='POST',
+                timeout=3
+            )
+            response.append(gather2)
+            
+            # Still no response, try one more time
+            response.say("I'm still here if you have questions.", voice=VOICE)
+            
+            gather3 = Gather(
+                input='speech',
+                action='/voice/conversation',
+                method='POST',
+                timeout=3
+            )
+            response.append(gather3)
+            
+            # After all attempts, transfer
+            response.say("I'm having trouble hearing you. Let me connect you with someone who can help.", voice=VOICE)
+            try:
+                response.dial(
+                    number=HUMAN_PHONE,
+                    timeout=30,
+                    action='/voice/dial-status',
+                    method='POST'
+                )
+            except Exception as e:
+                print(f"❌ Error adding dial to response: {e}")
+                response.say("Please call us directly at 504-383-3692.", voice=VOICE)
             
         elif any(word in speech_result for word in not_interested_keywords):
             # Not interested
