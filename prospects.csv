@@ -1,0 +1,17 @@
+prospects = [
+        {
+            "to_number": "+12155551692",
+            "prospect_name": "Jessica D. Alexander",
+            "firm_name": "Cozen O'Connor"
+        },
+        {
+            "to_number": "+13105552345",
+            "prospect_name": "John Smith",
+            "firm_name": "Smith & Associates"
+        },
+        {
+            "to_number": "+14045553456",
+            "prospect_name": "Sarah Johnson",
+            "firm_name": "Johnson Legal Group"
+        }
+    ]

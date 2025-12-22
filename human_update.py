@@ -738,7 +738,7 @@ async def handle_cold_call_response(request: Request):
         gather = Gather(
             num_digits=1,
             action='/voice/cold-call-response',
-            timeout=5
+            timeout=3
         )
         response.append(gather)
     
@@ -972,7 +972,7 @@ async def conversation(request: Request):
             action='/voice/conversation',
             method='POST',
             speech_timeout='auto',
-            timeout=7,  # 7 seconds for important questions that need thinking
+            timeout=5,  # 7 seconds for important questions that need thinking
             finish_on_key='#'
         )
         response.append(gather)
