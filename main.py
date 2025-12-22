@@ -100,6 +100,38 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
     conv = conversations[call_sid]
     conv["history"].append({"role": "user", "content": user_input})
     
+    # CRITICAL: Detect if user is stuck in a statement loop (saying yes/okay to vague statements)
+    if conv["phase"] == "SALES" and len(conv["history"]) > 6:
+        # Check if bot has been making vague commitment statements
+        recent_bot_messages = [msg.get('content', '').lower() for msg in conv["history"][-6:] 
+                              if msg.get('role') == 'assistant']
+        statement_indicators = ['let me show you', 'i\'ll get you started', 'we\'ll move forward',
+                               'i\'ll guide you', 'let\'s get started', 'i\'ll gather', 'welcome aboard',
+                               'you\'re on your way', 'we\'re all set']
+        
+        has_vague_statements = sum(1 for msg in recent_bot_messages 
+                                   if any(indicator in msg for indicator in statement_indicators))
+        
+        # If bot made 2+ vague statements and user keeps saying yes/okay, switch to onboarding NOW
+        if has_vague_statements >= 2:
+            recent_user_msgs = [msg.get('content', '').lower().strip() for msg in conv["history"][-4:] 
+                               if msg.get('role') == 'user']
+            user_agreeing = sum(1 for msg in recent_user_msgs 
+                               if msg in ['yes', 'okay', 'ok', 'sure', 'yeah', 'yep', 'yes.', 'okay.', 'ok.'])
+            
+            if user_agreeing >= 2:
+                print(f"⚠️ DETECTED STATEMENT LOOP - Forcing switch to ONBOARDING")
+                print(f"   Bot made {has_vague_statements} vague statements")
+                print(f"   User said yes/okay {user_agreeing} times")
+                conv["committed"] = True
+                conv["phase"] = "ONBOARDING"
+                conv["current_step"] = 1
+                conv["just_switched"] = True
+                # Return portal instruction immediately
+                step1_message = "Perfect! Open your browser and go to 4 d gaming dot games slash client dash portal dot html. Tell me when you have it open."
+                conv["history"].append({"role": "assistant", "content": step1_message})
+                return step1_message
+    
     # CRITICAL: Always check for pricing questions FIRST, even if just switched phases
     user_input_lower = user_input.lower()
     pricing_keywords = ['price', 'cost', 'how much', 'expensive', 'pay', 'payment', 'total']
@@ -118,14 +150,14 @@ def get_ai_response(call_sid: str, user_input: str, stage: str) -> str:
         
         # Add context based on phase
         if conv["phase"] == "ONBOARDING":
-            return pricing_response + " You'll see all the specific options and costs in the portal. Have you opened four d gaming dot games slash client dash portal dot html yet?"
+            return pricing_response + " You'll see all the specific options and costs in the portal. Have you opened 4 d gaming dot games slash client dash portal dot html yet?"
         else:  # SALES
             return pricing_response + " Most firms find it pays for itself within months. Does the concept make sense for your practice?"
     
     # If we JUST switched to onboarding (and NOT asking about price), provide Step 1 directly
     if conv.get("just_switched"):
         conv["just_switched"] = False  # Clear flag
-        step1_message = "Perfect! Open your browser and go to four d gaming dot games slash client dash portal dot html. Tell me when you have it open."
+        step1_message = "Perfect! Open your browser and go to 4 d gaming dot games slash client dash portal dot html. Tell me when you have it open."
         conv["history"].append({"role": "assistant", "content": step1_message})
         return step1_message
     
@@ -250,12 +282,17 @@ CRITICAL RULES:
 6. When they show interest → IMMEDIATELY transition to setup (don't ask more questions!)
 7. NEVER mention "demo" or "trial" - they go straight to the portal to purchase
 8. Be warm, confident, and helpful
+9. ⚠️ NEVER make statements that wait for a response - either ask a QUESTION with "?" or give information and move on
 
 AVOID:
 - ❌ Endless discovery questions - ask 2-3 max then close
 - ❌ Mentioning "demo", "trial", "test" - there is no demo
 - ❌ Asking "how do you see this fitting?" after they've already shown interest
 - ❌ Over-explaining features after they've committed
+- ❌ Making statements like "Let me show you..." or "I'll get you started..." and then WAITING - these confuse users!
+- ❌ Saying "we'll get started" multiple times without actually starting
+
+If you say "let me show you" or "let's get started" - you MUST immediately give the next instruction, not wait for their response!
 
 PRODUCT: LawBot 360
 - 24/7 AI-powered client intake chatbot
@@ -273,9 +310,21 @@ CONSULTATIVE APPROACH:
 6. Value: "If you could capture even 2-3 more quality leads per month, that would be significant, right?"
 7. Trial close: "Does that sound like it would help your firm?"
 8. Action close: "Are you ready to get set up right now so you can start capturing those leads?"
-   - If YES → Transition to onboarding immediately
-   - If NO or hesitation → Ask: "What's holding you back?" or "What concerns do you have?"
-     Then address their specific objection using their pain points
+   - If YES → IMMEDIATELY give portal URL: "Perfect! Open your browser and go to 4 d gaming dot games slash client dash portal dot html. Tell me when you have it open."
+   - If NO or hesitation → Ask: "What's holding you back?" Then address objection and re-close
+
+⚠️⚠️⚠️ CRITICAL - AVOID STATEMENT LOOPS:
+After commitment (user says YES to action close), DO NOT say ANY of these:
+- ❌ "Let me show you..."
+- ❌ "I'll get you started..."
+- ❌ "We'll move forward..."
+- ❌ "I'll guide you through..."
+- ❌ "Let's get started..."
+- ❌ "I'll gather some information..."
+
+Instead, IMMEDIATELY say: "Perfect! Open your browser and go to 4 d gaming dot games slash client dash portal dot html."
+
+NO statements between commitment and portal URL! Users get confused and frustrated by delays!
 
 OBJECTION HANDLING AFTER ACTION CLOSE:
 If they hesitate or say no, USE THEIR PAIN POINTS to close:
@@ -337,7 +386,7 @@ CRITICAL: If user just said "yes" or showed interest, START IMMEDIATELY with Ste
 Don't ask if they're ready - they already said yes! Just begin the onboarding.
 
 WHEN FIRST ENTERING ONBOARDING (user just committed):
-- Immediately respond with: "Perfect! Let's get you set up right now. Open your browser and go to four d gaming dot games slash client dash portal dot html. Tell me when you have it open."
+- Immediately respond with: "Perfect! Let's get you set up right now. Open your browser and go to 4 d gaming dot games slash client dash portal dot html. Tell me when you have it open."
 - Do NOT ask "Are you ready?" or "Shall we begin?" - they already committed!
 - Do NOT hesitate or wait - start Step 1 immediately
 
@@ -349,7 +398,7 @@ ONBOARDING RULES:
    
    EXAMPLES:
    Q: "What's the price of the system?"
-   A: "LawBot 360 has a base price of $25,000, plus you can choose from several add-ons and an optional monthly maintenance plan. You'll see all the specific options and costs as we go through the portal setup. Now, have you opened four d gaming dot games slash client dash portal dot html yet?"
+   A: "LawBot 360 has a base price of $25,000, plus you can choose from several add-ons and an optional monthly maintenance plan. You'll see all the specific options and costs as we go through the portal setup. Now, have you opened 4 d gaming dot games slash client dash portal dot html yet?"
    
    Q: "How much does this cost?"
    A: "The base system is $25,000 with customizable add-ons available. Let me walk you through the portal where you can see all the options. Have you got the portal open?"
@@ -372,7 +421,7 @@ ONBOARDING RULES:
 
 ONBOARDING STEPS:
 
-STEP 1: "Perfect! Let's get you set up right now. Open your browser and go to four d gaming dot games slash client dash portal dot html. Tell me when you have it open."
+STEP 1: "Perfect! Let's get you set up right now. Open your browser and go to 4 d gaming dot games slash client dash portal dot html. Tell me when you have it open."
 
 STEP 2: "Great! Now create your account or log in if you have one. Let me know when you're in."
 
@@ -440,7 +489,7 @@ Remember: Be PATIENT, HELPFUL, ONE STEP AT A TIME. They'll see pricing in the po
         # Track onboarding step progression
         if conv["phase"] == "ONBOARDING":
             response_lower = ai_response.lower()
-            if "four d gaming dot games slash client dash portal dot html" in response_lower:
+            if "4 d gaming dot games slash client dash portal dot html" in response_lower:
                 conv["current_step"] = 1
             elif "create your account" in response_lower or "log in" in response_lower:
                 conv["current_step"] = 2
