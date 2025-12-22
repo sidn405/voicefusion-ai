@@ -1044,7 +1044,7 @@ async def initiate_cold_call(request: Request):
     response = VoiceResponse()
     
     # Opening pitch (direct and value-focused)
-    opening_text = ("Hi! This is calling from 4D Gaming. "
+    opening_text = ("Hi! This is an AI assistant calling from 4D Gaming. "
                    "Quick question - are you losing leads outside business hours, nights and weekends? "
                    "We fix that with AI. Got 5 minutes?")
     
@@ -1060,7 +1060,7 @@ async def initiate_cold_call(request: Request):
     response.append(gather)
     
     # If no response, leave voicemail
-    voicemail_text = ("Hi, this is calling about LawBot 360. "
+    voicemail_text = ("Hi, this is an AI assistant calling about LawBot 360. "
                      "We help law firms capture leads 24/7 with AI. "
                      "Visit lawbot360.com or call us back. Thanks!")
     
@@ -1095,7 +1095,7 @@ async def handle_cold_call_response(request: Request):
             if call_sid in conversations:
                 conversations[call_sid]["identity_confirmed"] = True
             
-            intro_text = (f"Great! This is calling from 4D Gaming about LawBot 360 for {firm_name if firm_name else 'your firm'}. "
+            intro_text = (f"Great! this is an AI assistant calling from 4D Gaming about LawBot 360 for {firm_name if firm_name else 'your firm'}. "
                          f"We help law firms capture client leads 24/7 with AI. Got 5 minutes?")
             
             response.say(intro_text, voice=VOICE)
