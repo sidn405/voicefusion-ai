@@ -1143,19 +1143,44 @@ async def handle_cold_call_response(request: Request):
             gather = Gather(
                 input='speech',
                 action='/voice/conversation',
-                timeout=7
+                method='POST',
+                speech_timeout='auto',
+                timeout=5
             )
             response.append(gather)
 
             # If no response, prompt
-            response.say("Are you still there?")
-            gather2 = Gather(...)
+            response.say("Are you still there?", voice=VOICE)
+            gather2 = Gather(
+                input='speech',
+                action='/voice/conversation',
+                method='POST',
+                timeout=3
+            )
             response.append(gather2)
 
             # Still no response
-            response.say("I'm still here if you have questions.")
-            gather3 = Gather(...)
+            response.say("I'm still here if you have questions.", voice=VOICE)
+            gather3 = Gather(
+                input='speech',
+                action='/voice/conversation',
+                method='POST',
+                timeout=3
+            )
             response.append(gather3)
+            
+            # After all attempts, transfer
+            response.say("I'm having trouble hearing you. Let me connect you with someone who can help.", voice=VOICE)
+            try:
+                response.dial(
+                    number=HUMAN_PHONE,
+                    timeout=30,
+                    action='/voice/dial-status',
+                    method='POST'
+                )
+            except Exception as e:
+                print(f"❌ Error adding dial to response: {e}")
+                response.say("Please call us directly at 504-383-3692.", voice=VOICE)
             
         elif any(word in speech_result for word in not_interested_keywords):
             # Not interested
