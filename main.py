@@ -651,48 +651,86 @@ async def dashboard():
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh; padding: 20px;
+            min-height: 100vh;
+            padding: 20px;
         }
         .container { max-width: 800px; margin: 0 auto; }
         .header {
-            background: white; padding: 30px; border-radius: 15px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.1); margin-bottom: 30px;
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
         }
         .header h1 { color: #667eea; font-size: 32px; margin-bottom: 10px; }
         .header p { color: #666; font-size: 16px; }
         .panel {
-            background: white; border-radius: 15px; padding: 30px;
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
             box-shadow: 0 10px 40px rgba(0,0,0,0.1);
         }
         .form-group { margin-bottom: 20px; }
-        .form-group label { display: block; color: #555; font-weight: 500; margin-bottom: 8px; }
-        .form-group input {
-            width: 100%; padding: 12px 15px; border: 2px solid #e5e7eb;
-            border-radius: 8px; font-size: 15px;
+        .form-group label {
+            display: block;
+            color: #555;
+            font-weight: 500;
+            margin-bottom: 8px;
         }
-        .form-group input:focus { outline: none; border-color: #667eea; }
+        .form-group input {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 15px;
+        }
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
         .btn {
-            padding: 14px 28px; border: none; border-radius: 8px;
-            font-size: 16px; font-weight: 600; cursor: pointer; transition: all 0.3s;
+            padding: 14px 28px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
         }
         .btn-primary {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white; width: 100%;
+            color: white;
+            width: 100%;
         }
         .btn-primary:hover {
             transform: translateY(-2px);
             box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
         }
-        .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
-        .alert { padding: 15px 20px; border-radius: 8px; margin-bottom: 20px; }
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .alert {
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
         .alert-success { background: #d1fae5; color: #065f46; }
         .alert-error { background: #fee2e2; color: #991b1b; }
         .spinner {
-            border: 3px solid #f3f4f6; border-top: 3px solid #667eea;
-            border-radius: 50%; width: 20px; height: 20px;
-            animation: spin 1s linear infinite; display: inline-block; margin-right: 10px;
+            border: 3px solid #f3f4f6;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            margin-right: 10px;
         }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body>
@@ -701,39 +739,53 @@ async def dashboard():
             <h1>📞 LawBot 360 Cold Call Dashboard</h1>
             <p>Testing cold call functionality</p>
         </div>
+
         <div class="panel">
             <h2 style="margin-bottom: 20px;">🎯 Make Test Call</h2>
+            
             <div id="alert-container"></div>
+
             <div class="form-group">
                 <label>Your Cell Phone Number (for testing)</label>
                 <input type="tel" id="phone-number" placeholder="+15551234567">
             </div>
+
             <div class="form-group">
                 <label>Test Prospect Name</label>
                 <input type="text" id="prospect-name" value="Test Prospect">
             </div>
+
             <div class="form-group">
                 <label>Test Firm Name</label>
                 <input type="text" id="firm-name" value="Test Law Firm">
             </div>
+
             <button class="btn btn-primary" id="make-call-btn" onclick="makeTestCall()">
                 📞 Call My Phone (Test)
             </button>
         </div>
     </div>
+
     <script>
         async function makeTestCall() {
             const phoneNumber = document.getElementById('phone-number').value.trim();
             const prospectName = document.getElementById('prospect-name').value.trim();
             const firmName = document.getElementById('firm-name').value.trim();
-            if (!phoneNumber) { showAlert('Please enter your phone number', 'error'); return; }
+
+            if (!phoneNumber) {
+                showAlert('Please enter your phone number', 'error');
+                return;
+            }
+
             if (!phoneNumber.startsWith('+')) {
                 showAlert('Phone number must start with + (example: +15551234567)', 'error');
                 return;
             }
+
             const btn = document.getElementById('make-call-btn');
             btn.disabled = true;
             btn.innerHTML = '<div class="spinner"></div>Calling your phone...';
+
             try {
                 const response = await fetch('/api/make-cold-call', {
                     method: 'POST',
@@ -744,9 +796,11 @@ async def dashboard():
                         firm_name: firmName
                     })
                 });
+
                 const result = await response.json();
+
                 if (result.status === 'success') {
-                    showAlert('✅ Call initiated! Your phone should ring in a few seconds.', 'success');
+                    showAlert('✅ Call initiated! Your phone should ring in a few seconds. Answer to hear the AI bot.', 'success');
                 } else {
                     showAlert('❌ Error: ' + result.message, 'error');
                 }
@@ -757,6 +811,7 @@ async def dashboard():
                 btn.innerHTML = '📞 Call My Phone (Test)';
             }
         }
+
         function showAlert(message, type) {
             const container = document.getElementById('alert-container');
             container.innerHTML = '<div class="alert alert-' + type + '">' + message + '</div>';
@@ -765,7 +820,6 @@ async def dashboard():
     </script>
 </body>
 </html>""")
-
 
 @app.post("/api/make-cold-call")
 async def make_cold_call(request: Request):
