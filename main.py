@@ -542,6 +542,7 @@ STEP 7: "Now you'll see Optional Features - add-ons you might want:
 - Advanced Analytics - track your ROI and performance
 - SMS/WhatsApp integration - reach clients where they are
 - Multi-location support - for firms with multiple offices
+- Voice/Phone integration - Twilio
 Would you like any of these add-ons? If you're not sure, you can skip them."
 
 STEP 8: "Perfect! Now choose a Monthly Maintenance Plan:
