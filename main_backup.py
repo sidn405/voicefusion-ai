@@ -561,7 +561,17 @@ STEP 10: "Great! Look at the right side of your screen for the project summary. 
 
 STEP 11: "Perfect! If you have any files to upload or messages to add, you can click 'Browse'. Otherwise, we can move to payment. Ready to continue?"
 
-STEP 12: "Excellent! You'll see the 'Fund Escrow' button with your total amount. Click it — that opens Escrow.com where your payment is held securely until each milestone is delivered. Once you click that button, you're all set. You'll receive an email shortly with your integration form to kick off the build. It was great working with you today — our team will be in touch within 24 hours. Have a great day!"
+STEP 12: "Excellent! You'll see the 'Fund Escrow' button with your total amount. Click it and you'll be taken to Escrow.com. The payment includes everything you selected. Let me know when you're on the payment page."
+
+STEP 13: "Take your time completing the payment. I'm right here if you have questions. Let me know when it's done."
+
+STEP 14: "Congratulations! Your payment is complete. Here's what happens next:
+- Our team reviews your project within 24 hours
+- You'll receive your project timeline and start date  
+- Build takes 2 weeks
+- You'll receive the integration form via email shortly
+
+Do you have any questions about the process or your new LawBot 360 system?"
 
 Remember: Be PATIENT, HELPFUL, ONE STEP AT A TIME. They'll see pricing in the portal naturally.
 {silence_context}
@@ -636,9 +646,13 @@ Remember: Be PATIENT, HELPFUL, ONE STEP AT A TIME. They'll see pricing in the po
                 conv["current_step"] = 10
             elif "upload" in response_lower or "files" in response_lower or "browse" in response_lower:
                 conv["current_step"] = 11
-            elif "fund milestone" in response_lower or "fund escrow" in response_lower or "payment page" in response_lower:
+            elif "fund milestone" in response_lower or "payment page" in response_lower:
                 conv["current_step"] = 12
-                conv["payment_completed"] = True  # Escrow initiated = call complete
+            elif "take your time" in response_lower and "payment" in response_lower:
+                conv["current_step"] = 13
+            elif "congratulations" in response_lower:
+                conv["current_step"] = 14
+                conv["payment_completed"] = True
         
         return ai_response
         
@@ -1420,15 +1434,6 @@ async def conversation(request: Request):
         # Say AI response
         response.say(ai_text, voice=VOICE)
         
-        # If we just completed onboarding step 12 (Fund Escrow), end the call
-        conv_state = conversations.get(call_sid, {})
-        if (conv_state.get("phase") == "ONBOARDING" and 
-            conv_state.get("payment_completed") and
-            conv_state.get("current_step") == 12):
-            print(f"✅ Step 12 reached — escrow initiated, ending call for {call_sid}")
-            response.hangup()
-            return PlainTextResponse(content=str(response), media_type="application/xml")
-        
         # Continue conversation - wait for their response
         # Use longer timeout (7 seconds) after important questions
         gather = Gather(
@@ -1564,109 +1569,68 @@ async def fallback_choice(request: Request):
     return PlainTextResponse(content=str(response), media_type="application/xml")
 
 
-@app.post("/webhook/escrow-initiated")
-async def escrow_initiated_webhook(request: Request):
-    """
-    Called by the client portal the moment the user clicks 'Fund Escrow'.
-    Sends the integration form email immediately — no need to wait for payment to clear.
-    """
-    try:
-        data = await request.json()
-
-        project_id  = data.get("project_id")
-        user_email  = data.get("user_email")
-        client_name = data.get("client_name", "there")
-        firm_name   = data.get("firm_name", "your firm")
-        phone_number = data.get("phone_number")
-
-        dedup_key = f"escrow:{project_id}:{user_email}"
-        if dedup_key in sent_integration_forms:
-            print(f"⏭️  Duplicate escrow-initiated webhook for project {project_id} — skipping")
-            return {"status": "success", "message": "Already processed"}
-
-        print("=" * 70)
-        print("🔐 ESCROW INITIATED WEBHOOK RECEIVED")
-        print("=" * 70)
-        print(f"Project ID:  {project_id}")
-        print(f"Email:       {user_email}")
-        print(f"Client:      {client_name} / {firm_name}")
-        print("=" * 70)
-
-        # Send integration form right away
-        if user_email:
-            send_integration_form_email(user_email, client_name, firm_name)
-            sent_integration_forms.add(dedup_key)
-
-        # Update matching active call so the bot knows escrow was clicked
-        for call_sid, conv in conversations.items():
-            conv_email = conv.get("email", "").lower()
-            conv_phone = conv.get("phone_number", "")
-            if (user_email and conv_email == user_email.lower()) or \
-               (phone_number and conv_phone == phone_number):
-                conv["payment_completed"] = True
-                conv["payment_confirmed_by_webhook"] = True
-                conv["project_id"] = project_id
-                print(f"✅ Matched active call {call_sid} — marked escrow initiated")
-                break
-
-        return {"status": "success", "message": "Integration form sent"}
-
-    except Exception as e:
-        print(f"❌ escrow-initiated webhook error: {e}")
-        import traceback
-        traceback.print_exc()
-        return {"status": "error", "message": str(e)}
-
-
 @app.post("/webhook/payment-confirmed")
 async def payment_confirmed_webhook(request: Request):
-    """
-    Legacy Stripe webhook — kept for backward compatibility.
-    Now just delegates to the same integration form logic.
-    """
+    """Receive payment confirmation from backend/Stripe"""
     try:
         data = await request.json()
-
-        project_id   = data.get("project_id")
-        user_email   = data.get("user_email")
+        
+        # Expected data: {project_id, user_email, amount, phone_number (optional)}
+        project_id = data.get("project_id")
+        user_email = data.get("user_email")
         phone_number = data.get("phone_number")
-        amount       = data.get("amount")
-
+        amount = data.get("amount")
+        
+        # Prevent duplicate webhook processing (Stripe retries)
         webhook_key = f"payment:{project_id}:{user_email}"
         if webhook_key in sent_integration_forms:
             print(f"⏭️  Skipping duplicate webhook for project {project_id}")
             return {"status": "success", "message": "Already processed"}
-
+        
         print("=" * 70)
-        print("💰 PAYMENT CONFIRMED WEBHOOK (legacy) RECEIVED")
+        print("💰 PAYMENT CONFIRMED WEBHOOK RECEIVED")
         print("=" * 70)
         print(f"Project ID: {project_id}")
         print(f"Email: {user_email}")
+        print(f"Phone: {phone_number}")
         print(f"Amount: ${amount}")
         print("=" * 70)
-
-        # Find matching conversation
+        
+        # Find matching conversation by email or phone
+        matched_call_sid = None
         for call_sid, conv in conversations.items():
             conv_email = conv.get("email", "").lower()
             conv_phone = conv.get("phone_number", "")
+            
+            # Match by email or phone
             if (user_email and conv_email == user_email.lower()) or \
                (phone_number and conv_phone == phone_number):
-                conv["payment_completed"] = True
-                conv["payment_confirmed_by_webhook"] = True
-                conv["project_id"] = project_id
-                client_email = conv.get("email")
-                client_name  = conv.get("client_name", "there")
-                firm_name    = conv.get("firm_name", "your firm")
-                if client_email:
-                    send_integration_form_email(client_email, client_name, firm_name)
-                    sent_integration_forms.add(webhook_key)
-                return {"status": "success", "message": "Integration form sent"}
-
-        print("⚠️  No matching conversation found")
-        return {"status": "warning", "message": "No active call found"}
-
+                matched_call_sid = call_sid
+                print(f"✅ Matched to conversation: {call_sid}")
+                break
+        
+        if matched_call_sid:
+            # Mark payment as confirmed
+            conversations[matched_call_sid]["payment_completed"] = True
+            conversations[matched_call_sid]["payment_confirmed_by_webhook"] = True
+            conversations[matched_call_sid]["project_id"] = project_id
+            
+            # Send integration form
+            client_email = conversations[matched_call_sid].get("email")
+            client_name = conversations[matched_call_sid].get("client_name", "there")
+            firm_name = conversations[matched_call_sid].get("firm_name", "your firm")
+            
+            if client_email:
+                send_integration_form_email(client_email, client_name, firm_name)
+                print(f"📧 Integration form sent to {client_email}")
+            
+            return {"status": "success", "message": "Payment confirmed and integration form sent"}
+        else:
+            print("⚠️  No matching conversation found")
+            return {"status": "warning", "message": "Payment received but no active call found"}
+            
     except Exception as e:
-        print(f"❌ payment-confirmed webhook error: {e}")
+        print(f"❌ Webhook error: {e}")
         import traceback
         traceback.print_exc()
         return {"status": "error", "message": str(e)}
