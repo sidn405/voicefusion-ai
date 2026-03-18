@@ -478,7 +478,7 @@ Remember: Build VALUE, then transition to setup. Be transparent about pricing wh
         system_prompt = f"""You are a patient, helpful onboarding specialist for 4D Gaming.
 
 Current stage: {stage}
-Current step: {conv.get('current_step', 1)}/14
+Current step: {conv.get('current_step', 1)}/13
 Client name: {conv.get('client_name', 'Unknown')}
 Firm: {conv.get('firm_name', 'Unknown')}
 Phase: ONBOARDING MODE
@@ -561,7 +561,9 @@ STEP 10: "Great! Look at the right side of your screen for the project summary. 
 
 STEP 11: "Perfect! If you have any files to upload or messages to add, you can click 'Browse'. Otherwise, we can move to payment. Ready to continue?"
 
-STEP 12: "Excellent! You'll see the 'Fund Escrow' button with your total amount. Click it — that opens Escrow.com where your payment is held securely until each milestone is delivered. Once you click that button, you're all set. You'll receive an email shortly with your integration form to kick off the build. It was great working with you today — our team will be in touch within 24 hours. Have a great day!"
+STEP 12: "Great! Before funding escrow, you'll see your proposal PDF at the top of the payment section. Please take a moment to review it — it covers the full scope of work, deliverables for each milestone, and the payment schedule. Once you've read it, check the agreement box to confirm you agree to the terms. Let me know when you've checked the box."
+
+STEP 13: "Excellent! You'll see the 'Fund Escrow' button with your total amount. Click it — that opens Escrow.com where your payment is held securely until each milestone is delivered. Once you click that button, you're all set. You'll receive an email shortly with your integration form to kick off the build. It was great working with you today — our team will be in touch within 24 hours. Have a great day!"
 
 Remember: Be PATIENT, HELPFUL, ONE STEP AT A TIME. They'll see pricing in the portal naturally.
 {silence_context}
@@ -590,7 +592,7 @@ Remember: Be PATIENT, HELPFUL, ONE STEP AT A TIME. They'll see pricing in the po
                 conv["current_step"] = 3
         
         # General completion indicators for mid-steps (not critical steps)
-        elif conv.get("current_step") in [3, 4, 5, 6, 7, 8, 9, 10, 11]:
+        elif conv.get("current_step") in [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]:
             if any(word in user_input_lower for word in ["done", "finished", "completed", "ready", "next", "yes", "okay"]):
                 print(f"✅ User indicated completion: '{user_input}' - moving from step {conv.get('current_step')} to {conv.get('current_step') + 1}")
                 conv["current_step"] = conv.get("current_step") + 1
@@ -636,8 +638,10 @@ Remember: Be PATIENT, HELPFUL, ONE STEP AT A TIME. They'll see pricing in the po
                 conv["current_step"] = 10
             elif "upload" in response_lower or "files" in response_lower or "browse" in response_lower:
                 conv["current_step"] = 11
-            elif "fund milestone" in response_lower or "fund escrow" in response_lower or "payment page" in response_lower:
+            elif "proposal" in response_lower or "agreement box" in response_lower or "scope of work" in response_lower or "review it" in response_lower:
                 conv["current_step"] = 12
+            elif "fund milestone" in response_lower or "fund escrow" in response_lower or "payment page" in response_lower:
+                conv["current_step"] = 13
                 conv["payment_completed"] = True  # Escrow initiated = call complete
         
         return ai_response
